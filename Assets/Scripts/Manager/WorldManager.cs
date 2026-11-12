@@ -19,11 +19,18 @@ public struct UpgradeJob
 public class ProvinceUpgrades
 {
     public const int StatCount = 5;
-    public readonly List<UpgradeJob> Queue = new List<UpgradeJob>(4);   // index 0 = in progress
-    public int DaysLeft;                                                // days left for Queue[0]
-    public readonly int[] Done = new int[StatCount];                    // completed increases per stat
-    public readonly int[] Queued = new int[StatCount];                  // waiting / in progress per stat
-    internal bool IsActive;                                             // registered in WorldManager's active list
+    public readonly List<UpgradeJob> Queue = new List<UpgradeJob>(4);
+    public int DaysLeft;
+    public readonly int[] Done = new int[StatCount];
+    public readonly int[] Queued = new int[StatCount];
+    /// <summary>Independent price of each stat in THIS province (Base = basePrice).</summary>
+    public readonly GameValue[] Price = new GameValue[StatCount];
+    internal bool IsActive;
+
+    public ProvinceUpgrades(float basePrice)
+    {
+        for (int i = 0; i < StatCount; i++) Price[i] = new GameValue(basePrice);
+    }
 }
 
 public class Province : IDirtyable
@@ -86,7 +93,8 @@ public class Province : IDirtyable
 
     // ── upgrades ──
     private ProvinceUpgrades _upgrades;
-    public ProvinceUpgrades Upgrades => _upgrades ?? (_upgrades = new ProvinceUpgrades());
+    public ProvinceUpgrades Upgrades =>
+    _upgrades ?? (_upgrades = new ProvinceUpgrades(WorldManager.Instance.upgrades.basePrice));
     public bool HasUpgrades => _upgrades != null && _upgrades.Queue.Count > 0;
 
     /// <summary>Queues one increase (+1 base by default). Paid by the owner's treasury. See WorldManager.upgrades.</summary>
@@ -218,10 +226,11 @@ public class NationInfo
 [Serializable]
 public class UpgradeSettings
 {
-    [Tooltip("Price of the first increase (treasury points).")]
-    public float basePrice = 10f;
-    [Tooltip("Each earlier increase of the same stat adds this fraction of the base price. 0.05 = +5%.")]
-    [Range(0f, 1f)] public float inflationPerIncrease = 0.05f;
+    [Tooltip("Starting price of every stat in every province.")]
+    public float basePrice = 50f;
+    [Tooltip("Global inflation: price += inflation * the province's stat value. Tax 0.5 * 5 = +2.5.")]
+    public float inflation = 5f;
+    // (inflationPerIncrease removed)
     [Tooltip("Days one increase takes. Queued increases run one after another.")]
     public int daysPerIncrease = 90;
     [Tooltip("Max increases waiting in one province's queue (including the running one).")]
@@ -373,8 +382,9 @@ public class WorldManager : TickBehaviour
     public double GetIncreasePrice(Province p, StatType stat)
     {
         ProvinceUpgrades u = p.Upgrades;
-        int times = u.Done[(int)stat] + u.Queued[(int)stat];
-        double price = upgrades.basePrice + times * upgrades.basePrice * upgrades.inflationPerIncrease;
+        int s = (int)stat;
+        float projected = p.GetStat(stat).Value + u.Queued[s] * upgrades.amountPerIncrease;
+        double price = u.Price[s].Value + upgrades.inflation * projected;
         if (p.Owner != null) price *= p.Owner.UpgradeCostMultiplier.Value;
         return price;
     }

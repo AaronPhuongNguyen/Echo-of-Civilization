@@ -122,6 +122,52 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &127127427
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 127127428}
+  - component: {fileID: 127127429}
+  m_Layer: 0
+  m_Name: Pool
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &127127428
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 127127427}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 833740665}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &127127429
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 127127427}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 83c12ced3eb425e4483e16b103dfd29a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  checkInterval: 0.5
+  checksPerPass: 512
 --- !u!1 &234627332
 GameObject:
   m_ObjectHideFlags: 0
@@ -168,7 +214,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   map: {fileID: 0}
   provinceId: 0
-  increaseStat: 3
+  increaseStat: 1
   followLongPress: 1
   provinceName: 
   population: 0
@@ -506,6 +552,7 @@ Transform:
   - {fileID: 1905439403}
   - {fileID: 606491825}
   - {fileID: 2035398687}
+  - {fileID: 127127428}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &833740667
@@ -522,7 +569,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   upgrades:
     basePrice: 10
-    inflationPerIncrease: 0.05
+    inflation: 5
     daysPerIncrease: 90
     maxQueue: 100
     amountPerIncrease: 1
@@ -607,29 +654,29 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   settings:
-    width: 516
-    height: 516
+    width: 316
+    height: 316
     tileSize: 1
     pivotAtCenter: 1
     randomSeed: 0
-    seed: 987654321
-    landPercent: 0.4
-    minContinents: 1
-    maxContinents: 6
-    continentRadius: 0.5
-    continentWeight: 0.5
-    coastWarp: 0.15
-    featureSize: 0
-    octaves: 5
-    persistence: 0.5
-    lacunarity: 2
-    edgeWater: 0.3
-    smoothingPasses: 2
-    minLandPatch: 150
-    minWaterPatch: 120
-    minProvinces: 5
-    provinceMaxDivisor: 75
-    minTilesPerProvince: 1
+    seed: 54321
+    landPercent: 0.45
+    minContinents: 7
+    maxContinents: 9
+    continentRadius: 0.2
+    continentWeight: 0.4
+    coastWarp: 0.375
+    featureSize: 150
+    octaves: 6
+    persistence: 0.9
+    lacunarity: 2.75
+    edgeWater: 0.6
+    smoothingPasses: 1
+    minLandPatch: 300
+    minWaterPatch: 600
+    minProvinces: 1
+    provinceMaxDivisor: 40
+    minTilesPerProvince: 5
     taxRange: {x: 0.1, y: 1.1}
     economyRange: {x: 0.05, y: 0.5}
     defendRange: {x: 0.1, y: 0.5}
@@ -659,15 +706,15 @@ MonoBehaviour:
       Flat: 0
       Percent: 0
       Total: 1
-    minNations: 2
-    maxNations: 2
+    minNations: 5
+    maxNations: 250
     nationSizeVariation: 0.8
-    minIslandNationFactor: 0.1
-    waterColor: {r: 0.16, g: 0.36, b: 0.62, a: 1}
-    neutralColor: {r: 0.55, g: 0.55, b: 0.55, a: 1}
+    minIslandNationFactor: 0.3
+    waterColor: {r: 0.12, g: 0.32, b: 0.58, a: 1}
+    neutralColor: {r: 0.6, g: 0.6, b: 0.6, a: 1}
     borderColor: {r: 0, g: 0, b: 0, a: 1}
-    provinceBorderAlpha: 0.4
-    nationBorderAlpha: 0.8
+    provinceBorderAlpha: 0.35
+    nationBorderAlpha: 0.75
     borderPixelsPerTile: 8
     provinceBorderPixels: 1
     nationBorderPixels: 2
@@ -678,7 +725,11 @@ MonoBehaviour:
     maxPooledChunks: 6
     generateOnBackgroundThread: 1
   generateOnStart: 1
-  viewCamera: {fileID: 519420031}
+  viewCamera: {fileID: 0}
+  capitalMarkerPrefab: {fileID: 0}
+  markerProvinceFraction: 0.6
+  markerMinTiles: 3
+  markerSortingOrder: 10
 --- !u!1 &1939603375
 GameObject:
   m_ObjectHideFlags: 0

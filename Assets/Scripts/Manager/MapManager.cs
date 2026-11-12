@@ -14,8 +14,8 @@ public enum TileType : byte { Water = 0, Land = 1 }
 public class MapSettings
 {
     [Header("Size (500 - 2048 recommended)")]
-    public int width = 512;
-    public int height = 512;
+    public int width = 1024;
+    public int height = 1024;
     public float tileSize = 1f;
     [Tooltip("ON: the MapManager's position is the CENTER of the map. OFF: it is the bottom-left corner.")]
     public bool pivotAtCenter = true;
@@ -25,26 +25,26 @@ public class MapSettings
     public uint seed = 12345;
 
     [Header("World (continents)")]
-    [Range(0f, 1f)] public float landPercent = 0.4f;     // 0.5 = half of the world is land (exact)
-    public int minContinents = 3;
-    public int maxContinents = 6;
-    [Range(0.05f, 0.5f)] public float continentRadius = 0.25f;   // of the smaller map side (each continent varies +-30%)
-    [Range(0f, 1f)] public float continentWeight = 0.7f;         // 1 = smooth blobs, 0 = pure noise (messy)
-    [Range(0f, 0.4f)] public float coastWarp = 0.15f;            // how much coastlines wiggle / bend (fraction of map side)
-    public float featureSize = 60f;                      // coastline detail size in tiles (bigger = smoother coast)
-    [Range(1, 6)] public int octaves = 5;
-    [Range(0.1f, 0.9f)] public float persistence = 0.5f;
-    [Range(1.2f, 3f)] public float lacunarity = 2f;
-    [Range(0f, 1f)] public float edgeWater = 0.3f;       // keeps the map border in the ocean
-    [Range(0, 4)] public int smoothingPasses = 2;        // cellular smoothing: removes jagged coast / noise
-    public int minLandPatch = 150;                       // land specks smaller than this are removed
-    public int minWaterPatch = 120;                      // water specks smaller than this are filled (bigger ones stay as lakes)
+    [Range(0f, 1f)] public float landPercent = 0.42f;      // Giảm nhẹ diện tích đất để biển có không gian mở, thoáng đãng hơn
+    public int minContinents = 4;                        // Ít tâm lục địa hơn để tránh các mảng đất bị băm nát chằng chịt
+    public int maxContinents = 7;
+    [Range(0.05f, 0.5f)] public float continentRadius = 0.24f;   // Tăng nhẹ bán kính để các mảng lục địa đủ lớn, có hình khối rõ ràng
+    [Range(0f, 1f)] public float continentWeight = 0.75f;        // TĂNG MẠNH: Giúp định hình lục địa rõ nét, loại bỏ hiện tượng đứt gãy lộn xộn
+    [Range(0f, 0.4f)] public float coastWarp = 0.12f;            // GIẢM MẠNH: Giúp đường bờ biển bớt ngoằn ngoèo, gập ghềnh kiểu "nhiễu hạt"
+    public float featureSize = 140f;                     // TĂNG MẠNH: Tạo các thung lũng, vịnh lớn và mượt mà, triệt tiêu hoàn toàn lỗi lỗ hỗng
+    [Range(1, 6)] public int octaves = 4;                // Giảm số tầng nhiễu để các đường nét biên giới biển mượt và thanh thoát hơn
+    [Range(0.1f, 0.9f)] public float persistence = 0.45f;
+    [Range(1.2f, 3f)] public float lacunarity = 2.0f;
+    [Range(0f, 1f)] public float edgeWater = 0.4f;        // Mở rộng viền nước quanh bản đồ để biển bao bọc lục địa hoàn hảo
+    [Range(0, 4)] public int smoothingPasses = 3;        // TĂNG: Làm mượt triệt để các góc cạnh răng cưa của ô vuông bản đồ
+    public int minLandPatch = 200;                       // Loại bỏ các mảng đất nhỏ vụn vặt bám quanh bờ biển
+    public int minWaterPatch = 800;                      // TĂNG CỰC KỲ MẠNH: Xóa sạch toàn bộ các "lỗ thủng phô mai" nhỏ trên đất liền, chỉ giữ lại các hồ lớn
 
     [Header("Provinces (random count: Min .. Width*Height/Divisor)")]
-    public int minProvinces = 5;
-    [Tooltip("Max provinces = Width * Height / this. 2 = literal (W*H)/2 (extreme!). 150 = ~1700 provinces on 512x512, ~28000 on 2048x2048.")]
-    public int provinceMaxDivisor = 50;
-    public int minTilesPerProvince = 5;                  // safety: a province never gets smaller than this on average
+    public int minProvinces = 30;
+    [Tooltip("Max provinces = Width * Height / this. Lower divisor = way more provinces.")]
+    public int provinceMaxDivisor = 40;
+    public int minTilesPerProvince = 5;
 
     [Header("Province stats (random range per province)")]
     public Vector2 taxRange = new Vector2(0.1f, 1.1f);
@@ -52,7 +52,6 @@ public class MapSettings
     public Vector2 defendRange = new Vector2(0.1f, 0.5f);
     public Vector2 popGrowthRange = new Vector2(0.01f, 0.25f);
     public Vector2Int populationRange = new Vector2Int(500, 2500);
-    // Infrastructure = 0, Production Income = 1.0 (100%), Devastation = 0 are fixed at generation (no random).
 
     [Header("Province stat modifiers (applied at generation)")]
     public StatModifier taxMod = new StatModifier();
@@ -63,30 +62,30 @@ public class MapSettings
     public StatModifier productionMod = new StatModifier();
 
     [Header("Nations (random count: Min .. Max)")]
-    public int minNations = 10;
-    public int maxNations = 75;
+    public int minNations = 15;
+    public int maxNations = 45;
     [Tooltip("0 = every nation gets exactly the same land share. 0.3 = each nation is within +-30% of its fair share.")]
-    [Range(0f, 0.8f)] public float nationSizeVariation = 0.3f;
+    [Range(0f, 0.8f)] public float nationSizeVariation = 0.35f;
     [Tooltip("Landmasses smaller than (this x average nation size) get no nation of their own; they join the nearest nation as colonies.")]
-    [Range(0f, 1f)] public float minIslandNationFactor = 0.35f;
+    [Range(0f, 1f)] public float minIslandNationFactor = 0.4f;
 
     [Header("Rendering")]
-    public Color waterColor = new Color(0.16f, 0.36f, 0.62f);
-    public Color neutralColor = new Color(0.55f, 0.55f, 0.55f);
+    public Color waterColor = new Color(0.12f, 0.32f, 0.58f); // Màu xanh biển sâu thẳm, dịu mắt hơn
+    public Color neutralColor = new Color(0.6f, 0.6f, 0.6f);
     public Color borderColor = Color.black;
-    [Range(0f, 1f)] public float provinceBorderAlpha = 0.4f;
-    [Range(0f, 1f)] public float nationBorderAlpha = 0.8f;
-    [Range(4, 16)] public int borderPixelsPerTile = 8;   // border resolution inside detail chunks
-    [Range(1, 8)] public int provinceBorderPixels = 1;   // per side of the edge
-    [Range(1, 8)] public int nationBorderPixels = 2;     // per side of the edge (bold)
+    [Range(0f, 1f)] public float provinceBorderAlpha = 0.35f;
+    [Range(0f, 1f)] public float nationBorderAlpha = 0.75f;
+    [Range(4, 16)] public int borderPixelsPerTile = 8;
+    [Range(1, 8)] public int provinceBorderPixels = 1;
+    [Range(1, 8)] public int nationBorderPixels = 2;
 
     [Header("Performance (phone)")]
-    public int chunkSize = 128;                          // tiles per detail chunk side
-    public int maxDetailChunks = 9;                      // more visible chunks than this -> only the overview is shown
-    public int overviewMaxSize = 1024;                   // overview texture max side in pixels
-    public int chunkBuildsPerFrame = 2;                  // spreads chunk building over frames
+    public int chunkSize = 128;
+    public int maxDetailChunks = 9;
+    public int overviewMaxSize = 1024;
+    public int chunkBuildsPerFrame = 2;
     public int maxPooledChunks = 6;
-    public bool generateOnBackgroundThread = true;       // turn off for WebGL
+    public bool generateOnBackgroundThread = true;
 
     public MapSettings Clone() => (MapSettings)MemberwiseClone();
 }
@@ -114,6 +113,18 @@ public class MapManager : MonoBehaviour
 
     public bool IsGenerating { get; private set; }
     public bool IsReady { get; private set; }
+
+    [Header("Capital marker")]
+    [Tooltip("Prefab with a SpriteRenderer (white star). Tinted with the inverse nation color.")]
+    [SerializeField] private GameObject capitalMarkerPrefab;
+    [Tooltip("Marker size = capital province size (sqrt of tiles) * this.")]
+    [SerializeField, Range(0.1f, 1.5f)] private float markerProvinceFraction = 0.6f;
+    [Tooltip("Minimum marker size in tiles, so it stays visible in tiny provinces.")]
+    [SerializeField] private float markerMinTiles = 3f;
+    [SerializeField] private int markerSortingOrder = 10;
+
+    private Transform _markerRoot;
+    private readonly Dictionary<int, GameObject> _markers = new Dictionary<int, GameObject>();
 
     // ── data ──
     private MapSettings _s = new MapSettings();               // snapshot used during/after generation
@@ -235,6 +246,7 @@ public class MapManager : MonoBehaviour
             if (_destroyed || this == null) return;
             RegisterNations();                    // main thread: hand the nations over to the WorldManager
             BuildRendering();
+            BuildCapitalMarkers();
             IsReady = true;
             OnMapGenerated?.Invoke();
         }
@@ -244,6 +256,7 @@ public class MapManager : MonoBehaviour
 
     public void Clear()
     {
+        DestroyMarkers();
         IsReady = false;
         _provinces.Clear();
         _tiles = null;
@@ -283,6 +296,7 @@ public class MapManager : MonoBehaviour
         if (!_world.AssignProvince(p, target)) return false;
         UpdateProvinceColor(p);
         RefreshProvinceVisuals(p);
+        RefreshCapitalMarkers();
 
         OnProvinceOwnerChanged?.Invoke(p, old, nationId);
         return true;
@@ -1095,6 +1109,76 @@ public class MapManager : MonoBehaviour
         if (_tiles[i] == TileType.Water) return _s.waterColor;
         int p = _tileProvince[i];
         return p >= 0 ? _provinces[p].Color : (Color32)_s.neutralColor;
+    }
+    private void BuildCapitalMarkers()
+    {
+        DestroyMarkers();
+        if (!capitalMarkerPrefab || _world == null) return;
+
+        var root = new GameObject("Capital Markers");
+        root.transform.SetParent(transform, false);
+        root.transform.localPosition = PivotOffset;
+        _markerRoot = root.transform;
+
+        RefreshCapitalMarkers();
+    }
+
+    private void RefreshCapitalMarkers()
+    {
+        if (_markerRoot == null || !capitalMarkerPrefab) return;
+        var pool = PoolManager.Instance;
+
+        foreach (Nation n in _world.Nations)
+        {
+            Province cap = n.Capital;
+            _markers.TryGetValue(n.Id, out GameObject go);
+
+            if (cap == null)
+            {
+                if (go != null) pool.Despawn(go);
+                _markers.Remove(n.Id);
+                continue;
+            }
+
+            if (go == null || !go.activeSelf)     // missing or collected by the pool
+            {
+                go = pool.Spawn(capitalMarkerPrefab, _markerRoot);
+                _markers[n.Id] = go;
+            }
+
+            go.transform.localPosition = new Vector3(
+                (cap.Centroid.x + 0.5f) * _s.tileSize, (cap.Centroid.y + 0.5f) * _s.tileSize, 0f);
+
+            var sr = go.GetComponentInChildren<SpriteRenderer>();
+            if (!sr) continue;
+            sr.color = InverseColor(n.Color);
+            sr.sortingOrder = markerSortingOrder;
+
+            float tiles = Mathf.Max(markerMinTiles, Mathf.Sqrt(cap.TileCount) * markerProvinceFraction);
+            float spriteSize = sr.sprite ? Mathf.Max(0.0001f, sr.sprite.bounds.size.x) : 1f;
+            float s = tiles * _s.tileSize / spriteSize;
+            go.transform.localScale = new Vector3(s, s, 1f);
+        }
+    }
+
+    private void DestroyMarkers()
+    {
+        if (PoolManager.HasInstance)
+            foreach (var kv in _markers) if (kv.Value != null) PoolManager.Instance.Despawn(kv.Value);
+        _markers.Clear();
+        if (_markerRoot) Destroy(_markerRoot.gameObject);
+        _markerRoot = null;
+    }
+    private static Color InverseColor(Color c)
+    {
+        var inv = new Color(1f - c.r, 1f - c.g, 1f - c.b, 1f);
+        float dr = inv.r - c.r, dg = inv.g - c.g, db = inv.b - c.b;
+        if (dr * dr + dg * dg + db * db < 0.15f)               // too close (greys) -> black / white
+        {
+            float lum = c.r * 0.299f + c.g * 0.587f + c.b * 0.114f;
+            return lum > 0.5f ? Color.black : Color.white;
+        }
+        return inv;
     }
 
     // ── overview ──
