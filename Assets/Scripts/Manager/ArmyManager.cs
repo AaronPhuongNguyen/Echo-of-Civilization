@@ -364,7 +364,9 @@ public class ArmyManager : TickBehaviour
 
     // ── context menu helpers ──
     [Header("Context menu helpers (right-click the component title)")]
+    [Tooltip("Nation id. -1 = random nation.")]
     [SerializeField] private int debugNation = -1;
+    [Tooltip("Regiment index. -1 = random regiment.")]
     [SerializeField] private int debugRegiment = -1;
     [SerializeField] private float debugAmount = 20f;
 
@@ -372,6 +374,26 @@ public class ArmyManager : TickBehaviour
     [SerializeField] private bool showMilitaryInInspector = true;
     [SerializeField] private List<MilitaryInfo> militaryView = new List<MilitaryInfo>();
     private float _nextInspectorRefresh;
+
+    // ── debug ──
+    [Header("Debug")]
+    [Tooltip("ON: every nation that is at war shows a big number on the map in its own color = its total manpower (reserve + men in regiments / at the front).")]
+    public bool debugShowWarManpower = false;
+    [Tooltip("How much of the nation's bounding box the number may fill.")]
+    [Range(0.2f, 1f)] public float debugLabelFill = 0.6f;
+
+    private sealed class DebugLabel
+    {
+        public TextMeshPro Text;
+        public string Last;
+        public int ProvinceCount = -1;
+        public float BoundsAt;
+        public Vector3 Center;
+        public Vector2 Size;
+    }
+    private readonly Dictionary<int, DebugLabel> _dbgLabels = new Dictionary<int, DebugLabel>();
+    private Transform _dbgRoot;
+    private float _dbgNext;
 
     // ── data ──
     private readonly Dictionary<int, Military> _militaries = new Dictionary<int, Military>();
@@ -680,16 +702,13 @@ public class ArmyManager : TickBehaviour
         for (int i = 0; i < _list.Count; i++) _list[i].DailyUpdate(this);
     }
 
-    /// <summary>Real movement on the map (world units). Only retreating regiments are in this list.</summary>
-    /// 
-
-
-
+    [Header("Movement")]
     [Tooltip("March speed in tiles per game-second.")]
     [Min(0f)] public float moveSpeedTiles = 4f;
     [Tooltip("Reinforcement column speed in tiles per game-second.")]
     [Min(0f)] public float reinforceSpeedTiles = 6f;
 
+    /// <summary>Real movement on the map (world units): marching armies, retreating armies and reinforcement columns.</summary>
     private void MoveRegiments(float deltaTime)
     {
         if (_moving.Count == 0) return;
@@ -718,8 +737,6 @@ public class ArmyManager : TickBehaviour
         }
         _lodDirty = true;
     }
-
-
 
     // ─────────────────────────────────────────────────────────────────────
     //  VISUAL SYNC: WORLD -> SCREEN  (LateUpdate: follows the camera even while the game is paused)
@@ -992,13 +1009,13 @@ public class ArmyManager : TickBehaviour
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    //  CONTEXT MENU
+    //  CONTEXT MENU   (-1 = random nation / random regiment / random province)
     // ─────────────────────────────────────────────────────────────────────
-    [ContextMenu("Army: Add Regiment")]
-    private void MenuAdd() => RunMenu("Add Regiment", (m, r) => m.AddRegiment() != null, false);
+    [ContextMenu("Army: Add Regiment (random province of the nation)")]
+    private void MenuAdd() => RunMenu("Add Regiment", (m, r) => m.AddRegiment(RandomProvinceOf(m.Nation)) != null, false);
 
-    [ContextMenu("Army: Remove Regiment (debugRegiment, or the last one)")]
-    private void MenuRemove() => RunMenu("Remove Regiment", (m, r) => r != null ? m.RemoveRegiment(r) : m.RemoveLastRegiment(), false);
+    [ContextMenu("Army: Remove Regiment (debugRegiment, or random)")]
+    private void MenuRemove() => RunMenu("Remove Regiment", (m, r) => m.RemoveRegiment(r), true);
 
     [ContextMenu("Army: Set Preparation Level (debugAmount 1-10)")]
     private void MenuPrep() => RunMenu("Preparation level " + Mathf.RoundToInt(debugAmount),
@@ -1016,6 +1033,12 @@ public class ArmyManager : TickBehaviour
 
     [ContextMenu("Army: Log Military")]
     private void MenuLog() => RunMenu("Log", (m, r) => true, false);
+
+    private static Province RandomProvinceOf(Nation n)
+    {
+        if (n == null || n.Provinces.Count == 0) return null;   // null = the normal deploy rule
+        return n.Provinces[RNG.GetInt(0, n.Provinces.Count)];
+    }
 
     private void RunMenu(string label, Func<Military, Regiment, bool> action, bool needsRegiment)
     {

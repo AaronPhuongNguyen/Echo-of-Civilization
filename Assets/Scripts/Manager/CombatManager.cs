@@ -10,10 +10,11 @@ using UnityEngine;
 public class CombatSettings
 {
     [Header("Timing (game-seconds, follows game speed / pause)")]
-    [Tooltip("How often meetings between enemy armies are detected.")]
     [Min(0.05f)] public float detectInterval = 0.2f;
-    [Tooltip("One combat tick = one round of damage.")]
+    [Tooltip("Damage values are 'per round' = per this many game-seconds.")]
     [Min(0.05f)] public float tickInterval = 1f;
+    [Tooltip("How often damage is actually applied. Small = smooth (100 -> 99 -> 98). Damage is scaled by stepInterval / tickInterval.")]
+    [Min(0.02f)] public float stepInterval = 0.1f;
 
     [Header("Damage  (ATK / DEF / HP per man are GameValues on each Military)")]
     [Tooltip("Both sides take this extra damage every tick when Attacker ATK < Defender DEF.")]
@@ -38,6 +39,10 @@ public class CombatSettings
     [Range(0f, 1f)] public float holdSplit = 0.25f;
     [Tooltip("A column merges when it is this close (tiles) to its regiment (or in the same province).")]
     [Min(0f)] public float mergeRadiusTiles = 3f;
+
+    [Header("After the war")]
+    [Tooltip("When a war ends, regiments standing in (or marching to) former enemy land walk back to the nearest province of their own nation (the border).")]
+    public bool returnToBorderAfterWar = true;
 }
 
 [Serializable]
@@ -92,9 +97,11 @@ public sealed class Battle
 //  Meeting  : enemy (at war) regiments standing in the same province -> Battle (+ BattleView card).
 //  Damage   : per tick, from the totals of each side (see RunBattle).
 //  Occupy   : a regiment occupies the province it stands in once no enemy fighter is left there (WarManager.Occupy).
+//             WarManager then also occupies neighbouring enemy province(s); those are filled completely with the mask.
 //  Trail    : while a regiment walks inside provinces it occupies, an overlay (nation color, alpha 0.6) is painted
 //             on the tiles it walked through.
 //  Reinforce: columns spawn at a safe province, walk to the front and merge into their regiment.
+//  War end  : battles of that war stop at once and the regiments walk back to the border (nearest own province).
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-650)]
 public class CombatManager : TickBehaviour
@@ -147,11 +154,13 @@ public class CombatManager : TickBehaviour
     public int overlaySortingOrder = 3;
 
     [Header("Context menu helpers (right-click the component title)")]
+    [Tooltip("Nation id of A. -1 = random nation.")]
     [SerializeField] private int debugNationA = -1;
+    [Tooltip("Nation id of B. -1 = random nation.")]
     [SerializeField] private int debugNationB = -1;
-    [Tooltip("Regiment index of nation A. -1 = first free regiment.")]
+    [Tooltip("Regiment index of nation A. -1 = random free regiment.")]
     [SerializeField] private int debugRegiment = -1;
-    [Tooltip("Target province id. -1 = capital of nation B.")]
+    [Tooltip("Target province id. -1 = random province of nation B.")]
     [SerializeField] private int debugProvince = -1;
 
     [Header("Inspector view (read-only mirror, Editor only)")]
@@ -226,7 +235,10 @@ public class CombatManager : TickBehaviour
         ArmyManager army = ArmyManager.Instance;
         army.OnRegimentRetreat += HandleRetreat;
         army.OnRegimentArrived += HandleArrived;
-        WarManager.Instance.OnProvinceOccupationChanged += HandleOccupation;
+        WarManager wm = WarManager.Instance;
+        wm.OnProvinceOccupationChanged += HandleOccupation;
+        wm.OnProvinceOccupationSpread += HandleSpread;
+        wm.OnWarEnded += HandleWarEnded;
         WorldManager.Instance.OnNationsCleared += ClearAll;
 
         if (map != null)
@@ -244,7 +256,12 @@ public class CombatManager : TickBehaviour
             ArmyManager.Instance.OnRegimentRetreat -= HandleRetreat;
             ArmyManager.Instance.OnRegimentArrived -= HandleArrived;
         }
-        if (WarManager.HasInstance) WarManager.Instance.OnProvinceOccupationChanged -= HandleOccupation;
+        if (WarManager.HasInstance)
+        {
+            WarManager.Instance.OnProvinceOccupationChanged -= HandleOccupation;
+            WarManager.Instance.OnProvinceOccupationSpread -= HandleSpread;
+            WarManager.Instance.OnWarEnded -= HandleWarEnded;
+        }
         if (WorldManager.HasInstance) WorldManager.Instance.OnNationsCleared -= ClearAll;
         if (map != null) map.OnMapGenerated -= BuildOverlay;
         if (_instance == this && _quitting) _instance = null;
@@ -286,12 +303,15 @@ public class CombatManager : TickBehaviour
 
         if (_battles.Count > 0)
         {
+            float step = Mathf.Max(0.02f, settings.stepInterval);
             _tickAcc += deltaTime;
-            if (_tickAcc >= Mathf.Max(0.05f, settings.tickInterval))
+            int guard = 0;
+            while (_tickAcc >= step && guard++ < 20)      // catches up at high game speed
             {
-                _tickAcc = 0f;
-                RunBattles();
+                _tickAcc -= step;
+                RunBattles(step);
             }
+            if (guard >= 20) _tickAcc = 0f;
         }
 
         PaintTrails();
@@ -433,15 +453,15 @@ public class CombatManager : TickBehaviour
     //   ATK_B >  DEF_A : dmg to A * (1 + bonus)
     //   Every hpLostPerManpower HP lost = 1 manpower lost.
     // ─────────────────────────────────────────────────────────────────────
-    private void RunBattles()
+    private void RunBattles(float step)
     {
         _tmpBattles.Clear();
         _tmpBattles.AddRange(_battles);
         for (int i = 0; i < _tmpBattles.Count; i++)
-            if (!_tmpBattles[i].Ended) RunBattle(_tmpBattles[i]);
+            if (!_tmpBattles[i].Ended) RunBattle(_tmpBattles[i], step);
     }
 
-    private void RunBattle(Battle b)
+    private void RunBattle(Battle b, float step)
     {
         Prune(b.SideA); Prune(b.SideB);
         if (b.SideA.Count == 0 || b.SideB.Count == 0 || !Hostile(b.LeadA, b.LeadB))
@@ -456,6 +476,7 @@ public class CombatManager : TickBehaviour
 
         double stale = settings.stalemateDamage.Value;
         double bonus = 1.0 + settings.bonusDamage.Value;
+        double scale = step / Math.Max(0.05f, settings.tickInterval);   // fraction of a round
 
         double toB = Math.Max(0.0, atkA - defB);
         double toA = Math.Max(0.0, atkB - defA);
@@ -463,8 +484,8 @@ public class CombatManager : TickBehaviour
         else toB *= bonus;
         if (atkB > defA) toA *= bonus;
 
-        toB *= mulA;
-        toA *= mulB;
+        toB *= mulA * scale;
+        toA *= mulB * scale;
 
         ApplyDamage(b.SideB, toB);
         ApplyDamage(b.SideA, toA);
@@ -478,7 +499,7 @@ public class CombatManager : TickBehaviour
 
         if (settings.reinforcements)
         {
-            b.ReinforceTimer += settings.tickInterval;
+            b.ReinforceTimer += step;                       // was tickInterval
             if (b.ReinforceTimer >= settings.reinforceInterval)
             {
                 b.ReinforceTimer = 0f;
@@ -574,6 +595,65 @@ public class CombatManager : TickBehaviour
         }
 
         OnBattleEnded?.Invoke(b, winner);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  WAR ENDED: stop its battles, armies walk back to the border
+    // ─────────────────────────────────────────────────────────────────────
+    private void HandleWarEnded(War w, WarResult result)
+    {
+        if (w == null || !ArmyManager.HasInstance) return;
+
+        // 1) battles between the two sides of this war stop now (unless the nations still fight in another war).
+        //    A private list: this can run while RunBattles / Detect are iterating their own lists.
+        var ending = new List<Battle>();
+        for (int i = 0; i < _battles.Count; i++)
+        {
+            Battle b = _battles[i];
+            WarSide sa = w.SideOf(b.LeadA.Id), sb = w.SideOf(b.LeadB.Id);
+            if (sa != WarSide.None && sb != WarSide.None && sa != sb && !Hostile(b.LeadA, b.LeadB)) ending.Add(b);
+        }
+        for (int i = 0; i < ending.Count; i++) EndBattle(ending[i], WarSide.None);
+
+        // 2) armies go home
+        if (!settings.returnToBorderAfterWar) return;
+        ReturnToBorder(w, w.Attackers);
+        ReturnToBorder(w, w.Defenders);
+    }
+
+    private void ReturnToBorder(War w, List<int> members)
+    {
+        ArmyManager army = ArmyManager.Instance;
+        for (int m = 0; m < members.Count; m++)
+        {
+            Nation n = WorldManager.Instance.GetNation(members[m]);
+            Military mil = n != null ? army.GetMilitary(n) : null;
+            if (mil == null) continue;
+
+            for (int i = 0; i < mil.Regiments.Count; i++)
+            {
+                Regiment r = mil.Regiments[i];
+                if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) continue;   // retreating ones already go to a safe province
+
+                Province here = r.CurrentProvince ?? r.Province;
+                bool inEnemyLand = MustLeave(w, n, here);
+                bool headingToEnemyLand = r.State == RegimentState.Moving && MustLeave(w, n, r.Destination);
+                if (!inEnemyLand && !headingToEnemyLand) continue;
+
+                Province home = FindSafeProvince(n, r.WorldPosition, null);   // nearest own province = the border
+                if (home == null) continue;
+                army.MoveRegiment(r, home);
+            }
+        }
+    }
+
+    /// <summary>True when p belongs to a nation that was on the opposite side of the ended war and 'me' is not at war with it any more.</summary>
+    private bool MustLeave(War w, Nation me, Province p)
+    {
+        if (p == null || p.Owner == null || p.Owner == me) return false;
+        WarSide mine = w.SideOf(me.Id), os = w.SideOf(p.Owner.Id);
+        if (mine == WarSide.None || os == WarSide.None || os == mine) return false;
+        return !Hostile(me, p.Owner);       // still at war with the owner in another war: stay
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -770,6 +850,12 @@ public class CombatManager : TickBehaviour
         else _occupier.Remove(p.Id);
     }
 
+    /// <summary>A neighbour occupied together with a walked-into province: no army walked there, so the whole province gets the mask.</summary>
+    private void HandleSpread(War w, Province p, Nation occupier)
+    {
+        PaintProvince(p, occupier);
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     //  VIRTUAL BORDER (overlay painted along the walked path)
     // ─────────────────────────────────────────────────────────────────────
@@ -860,6 +946,21 @@ public class CombatManager : TickBehaviour
             }
     }
 
+    /// <summary>Fills EVERY tile of the province with the nation color (used for provinces occupied by spread).</summary>
+    private void PaintProvince(Province p, Nation n)
+    {
+        if (_px == null || map == null || p == null || n == null || p.Tiles == null) return;
+        Color32 col = n.Color;
+        col.a = (byte)Mathf.RoundToInt(Mathf.Clamp01(trailAlpha) * 255f);
+        int w = map.Width;
+        for (int i = 0; i < p.Tiles.Length; i++)
+        {
+            int t = p.Tiles[i];
+            _px[((t / w) / _ovScale) * _ovW + ((t % w) / _ovScale)] = col;
+        }
+        _dirty = true;
+    }
+
     private void ClearProvincePixels(Province p)
     {
         if (_px == null || map == null || p.Tiles == null) return;
@@ -946,11 +1047,12 @@ public class CombatManager : TickBehaviour
 
     // ─────────────────────────────────────────────────────────────────────
     //  CONTEXT MENU  (declare the war first: War: FORCE Declare War)
+    //   -1 = RANDOM nation / regiment / province.
     // ─────────────────────────────────────────────────────────────────────
-    [ContextMenu("Combat: Send Regiment (A) to Province (debugProvince / capital of B)")]
+    [ContextMenu("Combat: Send Regiment (A) to Province (debugProvince / random province of B)")]
     private void MenuSend() => RunSend(false);
 
-    [ContextMenu("Combat: Send ALL regiments of A to Province (debugProvince / capital of B)")]
+    [ContextMenu("Combat: Send ALL regiments of A to Province (debugProvince / random province of B)")]
     private void MenuSendAll() => RunSend(true);
 
     [ContextMenu("Combat: End All Battles (no winner)")]
@@ -985,18 +1087,38 @@ public class CombatManager : TickBehaviour
         Military m = a.GetMilitary();
         if (m == null || m.Regiments.Count == 0) { Debug.LogWarning("[Combat] Nation A has no regiments."); return; }
 
-        Province dest = debugProvince >= 0 && map != null ? map.GetProvince(debugProvince) : b.Capital;
+        // target: debugProvince, or a RANDOM province of B (not the capital)
+        Province dest = null;
+        if (debugProvince >= 0 && map != null) dest = map.GetProvince(debugProvince);
+        else if (b.Provinces.Count > 0) dest = b.Provinces[RNG.GetInt(0, b.Provinces.Count)];
         if (dest == null) { Debug.LogWarning("[Combat] Target province not found."); return; }
+
+        // which regiment(s)
+        int only = -1;
+        if (!all)
+        {
+            if (debugRegiment >= 0) only = debugRegiment;
+            else
+            {
+                var free = new List<int>();
+                for (int i = 0; i < m.Regiments.Count; i++)
+                {
+                    RegimentState s = m.Regiments[i].State;
+                    if (s != RegimentState.Retreating && s != RegimentState.Fighting) free.Add(i);
+                }
+                if (free.Count == 0) { Debug.LogWarning("[Combat] Nation A has no free regiment."); return; }
+                only = free[RNG.GetInt(0, free.Count)];
+            }
+        }
 
         ArmyManager army = ArmyManager.Instance;
         int sent = 0;
         for (int i = 0; i < m.Regiments.Count; i++)
         {
-            if (!all && debugRegiment >= 0 && i != debugRegiment) continue;
+            if (!all && i != only) continue;
             Regiment r = m.Regiments[i];
             if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) continue;
             if (army.MoveRegiment(r, dest)) sent++;
-            if (!all) break;
         }
         Debug.Log($"[Combat] {a.Name} -> {dest.Name} ({b.Name}): sent {sent} regiment(s). At war: {WarManager.Instance.IsAtWar(a, b)}");
     }

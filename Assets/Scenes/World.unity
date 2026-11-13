@@ -260,6 +260,7 @@ GameObject:
   m_Component:
   - component: {fileID: 244872684}
   - component: {fileID: 244872685}
+  - component: {fileID: 244872686}
   m_Layer: 0
   m_Name: War
   m_TagString: Untagged
@@ -300,9 +301,11 @@ MonoBehaviour:
     callAllies: 1
     callDefensivePacts: 1
     vassalsFollowOverlord: 1
-    scorePerProvince: 5
-    capitulationScore: 100
-    autoEndAtScore: 1
+    capitalOccupiedPercent: 20
+    armyDestroyedPercent: 30
+    allProvincesPercent: 50
+    monthlyLeadPercent: 5
+    spreadProvinces: 1
     truceDays: 360
     relationAfterPeace: -5
     autoOccupyByRegiments: 1
@@ -314,6 +317,56 @@ MonoBehaviour:
   debugAmount: 10
   showWarsInInspector: 1
   warsView: []
+--- !u!114 &244872686
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 244872683}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8d789e7d57702547928ad6bba9d40b9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  settings:
+    detectInterval: 0.2
+    tickInterval: 1
+    stalemateDamage:
+      Base: 1
+      Flat: 0
+      Percent: 0
+      Total: 1
+    bonusDamage:
+      Base: 0.5
+      Flat: 0
+      Percent: 0
+      Total: 1
+    hpLostPerManpower: 5
+    reinforcements: 1
+    reinforceInterval: 3
+    reinforceBelowPercent: 99
+    columnPercent: 15
+    minColumnManpower: 50
+    maxColumnsPerRegiment: 3
+    holdSplit: 0.25
+    mergeRadiusTiles: 3
+    returnToBorderAfterWar: 1
+  map: {fileID: 0}
+  attackLogo: {fileID: 21300000, guid: fd6742c1b57dfc04f9d44c108fd70f32, type: 3}
+  defendLogo: {fileID: 21300000, guid: b7fe80fa6f21e0c419dce02e1c1da4f7, type: 3}
+  backgroundSprite: {fileID: 21300000, guid: d474c929123057e4aa307f0be10b79a5, type: 3}
+  battleCardScale: 2
+  trailRadiusTiles: 3
+  trailAlpha: 0.6
+  overlayMaxSize: 1024
+  overlaySortingOrder: 3
+  debugNationA: -1
+  debugNationB: -1
+  debugRegiment: -1
+  debugProvince: -1
+  showBattlesInInspector: 1
+  battlesView: []
 --- !u!1 &519420028
 GameObject:
   m_ObjectHideFlags: 0
@@ -451,6 +504,54 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1011075991}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &588382370
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 588382371}
+  - component: {fileID: 588382372}
+  m_Layer: 0
+  m_Name: Player
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &588382371
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 588382370}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 833740665}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &588382372
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 588382370}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f9d76c46a6ba26b4cba7dda579f11094, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  map: {fileID: 0}
+  startNationId: -1
+  spectator: 1
+  playerNationName: 
 --- !u!1 &606491824
 GameObject:
   m_ObjectHideFlags: 0
@@ -744,6 +845,7 @@ Transform:
   - {fileID: 2034183098}
   - {fileID: 244872684}
   - {fileID: 929751828}
+  - {fileID: 588382371}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &833740667
@@ -767,6 +869,8 @@ MonoBehaviour:
   showNationsInInspector: 1
   inspectorRefreshSeconds: 1
   nationsView: []
+  popGrowthYears: 5
+  popGrowthBase: 5000
 --- !u!1 &929751827
 GameObject:
   m_ObjectHideFlags: 0
@@ -776,6 +880,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 929751828}
+  - component: {fileID: 929751829}
   m_Layer: 0
   m_Name: AI
   m_TagString: Untagged
@@ -798,6 +903,60 @@ Transform:
   m_Children: []
   m_Father: {fileID: 833740665}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &929751829
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 929751827}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 69f4f29f7e6016f40b8c73d489b0ed90, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  settings:
+    economyIntervalDays: 6
+    diplomacyIntervalDays: 15
+    militaryInterval: 1.5
+    nationsPerTick: 4
+    aggressionRange: {x: 0.1, y: 0.9}
+    friendlinessRange: {x: 0.2, y: 0.9}
+    peaceReserve: 0.15
+    warReserve: 0.05
+    maxIncreasesPerRound: 3
+    sampleProvinces: 8
+    maxQueuePerProvince: 2
+    mustPopGrowthBelow: 0.5
+    popGrowthWeight: 5
+    taxWeight: 4
+    economyWeight: 3
+    infrastructureWeight: 2
+    defendWeight: 1
+    peacePrepLevel: 1
+    alertMaxPrepLevel: 7
+    alertThreshold: 0.25
+    attackRatio: 1.25
+    defendRatio: 1.15
+    minAttackStrength: 0.6
+    minDefendStrength: 0.25
+    regroupBelow: 0.3
+    attackerDefendShare: 0.35
+    provinceDefendWeight: 2000
+    massReadyFraction: 0.75
+    massTimeout: 40
+    manageShares: 1
+    shareInterval: 8
+    warMinPowerRatio: 1.6
+    fearRatio: 1.2
+    warChancePerCheck: 0.3
+    maxWars: 1
+    minDaysBetweenWars: 360
+    improveUntil: 45
+    winProgress: 100
+    stalemateDays: 1080
+    allowVassalize: 0
+  map: {fileID: 0}
 --- !u!1 &1011075990
 GameObject:
   m_ObjectHideFlags: 0
@@ -1147,7 +1306,7 @@ MonoBehaviour:
     economyRange: {x: 0.05, y: 0.5}
     defendRange: {x: 0.1, y: 0.5}
     popGrowthRange: {x: 0.01, y: 0.25}
-    populationRange: {x: 500, y: 2500}
+    populationRange: {x: 2000, y: 12000}
     taxMod:
       Flat: 0
       Percent: 0
@@ -1172,8 +1331,8 @@ MonoBehaviour:
       Flat: 0
       Percent: 0
       Total: 1
-    minNations: 10
-    maxNations: 500
+    minNations: 2
+    maxNations: 2
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
     waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}
@@ -1372,7 +1531,7 @@ MonoBehaviour:
   defaultPreparationLevel: 1
   prepStepInterval: 0.5
   prepStepPercent: 1
-  defaultRegiments: 10
+  defaultRegiments: 100
   retreatManpowerPercent: 10
   MinManpowerToRetreat: 5000
   reinforcePerDay: 0.02
@@ -1386,6 +1545,10 @@ MonoBehaviour:
   debugAmount: 20
   showMilitaryInInspector: 1
   militaryView: []
+  debugShowWarManpower: 1
+  debugLabelFill: 0.6
+  moveSpeedTiles: 4
+  reinforceSpeedTiles: 6
 --- !u!1 &2035398686
 GameObject:
   m_ObjectHideFlags: 0

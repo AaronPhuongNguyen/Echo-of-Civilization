@@ -142,6 +142,24 @@ public class Nation : IDirtyable
     /// <summary>Daily income: Economy spread over one year, times GdpMultiplier.</summary>
     public double GDP => Economy * GdpMultiplier.Value / DateManager.EconomyDaysPerYear;
 
+    public bool IsPlayer { get; internal set; }
+    public bool IsAI { get; internal set; }
+
+    /// <summary>Every manpower that dies removes 1 population, spread over provinces by population.</summary>
+    public void LoseMen(double men)
+    {
+        if (men <= 0.0 || Provinces.Count == 0) return;
+        double total = 0.0;
+        for (int i = 0; i < Provinces.Count; i++) total += Provinces[i].Population;
+        if (total <= 0.0) return;
+        double loss = Math.Min(men, total);
+        for (int i = 0; i < Provinces.Count; i++)
+        {
+            Province p = Provinces[i];
+            p.Population = (float)Math.Max(0.0, p.Population - loss * (p.Population / total));
+        }
+    }
+
     public double AddMoney(double amount)
     {
         double e = Economy;
@@ -297,6 +315,17 @@ public class WorldManager : TickBehaviour
     public event Action<Province, StatType> OnIncreaseQueued;
     public event Action<Province, StatType> OnIncreaseCompleted;
 
+
+
+    [Header("Population growth")]
+    [Min(1)] public int popGrowthYears = 5;
+    public float popGrowthBase = 5000f;
+    private int _yearCounter;
+
+    // OnEnable:   
+    // OnDisable:  ;
+    // ClearNations(): _yearCounter = 0;
+
     protected override int TickPriority => -1000;
 
     private void Awake()
@@ -316,12 +345,14 @@ public class WorldManager : TickBehaviour
     {
         base.OnEnable();
         DateManager.Instance.OnDayPassed += HandleDayPassed;
+        DateManager.Instance.OnYearPassed += HandleYearPassed;
     }
 
     protected override void OnDisable()
     {
         base.OnDisable();
         if (DateManager.HasInstance) DateManager.Instance.OnDayPassed -= HandleDayPassed;
+        if (DateManager.HasInstance) DateManager.Instance.OnYearPassed -= HandleYearPassed;
         if (_instance == this && _quitting) _instance = null;
     }
 
@@ -486,6 +517,24 @@ public class WorldManager : TickBehaviour
                 _active.RemoveAt(_active.Count - 1);
             }
         }
+    }
+
+    private void HandleYearPassed()
+    {
+        if (++_yearCounter < Mathf.Max(1, popGrowthYears)) return;
+        _yearCounter = 0;
+        GrowPopulation();
+    }
+
+    /// <summary>Each province: Population += popGrowthBase * PopGrowth.</summary>
+    public void GrowPopulation()
+    {
+        for (int i = 0; i < _nations.Count; i++)
+            for (int j = 0; j < _nations[i].Provinces.Count; j++)
+            {
+                Province p = _nations[i].Provinces[j];
+                p.Population += popGrowthBase * p.PopGrowth.Value;
+            }
     }
 
     // ── create / remove ──

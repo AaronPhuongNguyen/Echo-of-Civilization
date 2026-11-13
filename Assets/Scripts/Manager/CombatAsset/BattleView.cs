@@ -1,16 +1,22 @@
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
 /// Battle card:  [Logo][Side A manpower] | [Logo][Side B manpower]   on a dark background.
-/// Logos are tinted with the nation color of their side. Pooled by PoolManager, placed by CombatManager.
+/// Numbers are shown in full ("300.000") and count smoothly towards the real value
+/// (300.000 -> 299.999 -> 299.998 ...), following game speed and pause.
 /// </summary>
 public class BattleView : MonoBehaviour, IPoolable
 {
     private Image _bg, _divider, _logoA, _logoB;
     private TextMeshProUGUI _textA, _textB;
     private bool _built;
+
+    // real value (target), shown value (animated), speed (men per game-second)
+    private double _tA, _tB, _sA, _sB, _rA, _rB;
+    private long _dispA = long.MinValue, _dispB = long.MinValue;
 
     public void OnSpawn() { }
     public void OnDespawn() { }
@@ -24,17 +30,69 @@ public class BattleView : MonoBehaviour, IPoolable
 
         _logoA.sprite = cm.AttackLogo; _logoA.color = b.ColorA;
         _logoB.sprite = cm.DefendLogo; _logoB.color = b.ColorB;
-        SetNumbers(b.ManpowerA, b.ManpowerB);
+
+        // start exactly at the real value (no animation from an old pooled number)
+        _tA = _sA = b.ManpowerA; _tB = _sB = b.ManpowerB;
+        _rA = _rB = 0.0;
+        _dispA = _dispB = long.MinValue;
+        ShowNumbers();
     }
 
     public void SetLocalPosition(Vector2 local) => ((RectTransform)transform).anchoredPosition = local;
 
+    /// <summary>Called once per combat tick with the real manpower. The card counts down to it over the next tick.</summary>
     public void SetNumbers(double a, double b)
     {
         if (_textA == null) return;
-        string sa = Regiment.FormatManpower(a), sb = Regiment.FormatManpower(b);
-        if (_textA.text != sa) _textA.text = sa;
-        if (_textB.text != sb) _textB.text = sb;
+        float window = CombatManager.HasInstance ? Mathf.Max(0.02f, CombatManager.Instance.settings.stepInterval) * 0.95f : 0.095f;
+        _tA = a; _tB = b;
+        _rA = Math.Abs(_tA - _sA) / window;
+        _rB = Math.Abs(_tB - _sB) / window;
+    }
+
+    private void Update()
+    {
+        if (_textA == null) return;
+        if (_sA == _tA && _sB == _tB) return;
+
+        float dt = TickManager.Paused ? 0f : Time.unscaledDeltaTime * TickManager.GameSpeed;
+        if (dt <= 0f) return;
+
+        _sA = Step(_sA, _tA, _rA, dt);
+        _sB = Step(_sB, _tB, _rB, dt);
+        ShowNumbers();
+    }
+
+    private static double Step(double cur, double target, double rate, float dt)
+    {
+        double d = target - cur;
+        double max = rate * dt;
+        if (Math.Abs(d) <= max) return target;
+        return cur + Math.Sign(d) * max;
+    }
+
+    private void ShowNumbers()
+    {
+        long a = (long)Math.Round(_sA), b = (long)Math.Round(_sB);
+        if (a != _dispA) { _dispA = a; _textA.text = Dotted(a); }
+        if (b != _dispB) { _dispB = b; _textB.text = Dotted(b); }
+    }
+
+    /// <summary>300000 -> "300.000"</summary>
+    public static string Dotted(long v)
+    {
+        if (v < 0) v = 0;
+        string s = v.ToString();
+        if (s.Length <= 3) return s;
+        char[] r = new char[s.Length + (s.Length - 1) / 3];
+        int w = r.Length - 1, c = 0;
+        for (int i = s.Length - 1; i >= 0; i--)
+        {
+            if (c == 3) { r[w--] = '.'; c = 0; }
+            r[w--] = s[i];
+            c++;
+        }
+        return new string(r);
     }
 
     private void Build(CombatManager cm, ArmyManager army)
@@ -65,7 +123,6 @@ public class BattleView : MonoBehaviour, IPoolable
         dv.sizeDelta = new Vector2(Mathf.Max(2f, h * 0.04f), h * 0.8f);
         dv.anchoredPosition = Vector2.zero;
 
-        // left half: side A      right half: side B (same layout)
         _logoA = NewImage("LogoA", root);
         Place(_logoA.rectTransform, 0f, pad, m);
         _logoA.preserveAspect = true;
@@ -102,7 +159,12 @@ public class BattleView : MonoBehaviour, IPoolable
         t.raycastTarget = false;
         t.alignment = TextAlignmentOptions.Center;
         t.overflowMode = TextOverflowModes.Overflow;
+        t.enableWordWrapping = false;
         t.fontStyle = FontStyles.Bold;
+        // full numbers ("300.000") are wider than "300K": shrink to fit the half card
+        t.enableAutoSizing = true;
+        t.fontSizeMax = h * 0.45f;
+        t.fontSizeMin = h * 0.12f;
         t.fontSize = h * 0.45f;
         t.color = Color.white;
         RectTransform rt = t.rectTransform;
