@@ -38,6 +38,8 @@ public sealed class War
     /// <summary>Attacker progress minus defender progress (-100 .. +100). Kept for old code that read the single score.</summary>
     public float Score => AttackerProgress - DefenderProgress;
 
+    internal bool AttackerDecisionRaised, DefenderDecisionRaised;
+
     public float ProgressOf(WarSide side) =>
         side == WarSide.Attacker ? AttackerProgress : side == WarSide.Defender ? DefenderProgress : 0f;
     public int DaysActive { get; internal set; }
@@ -65,6 +67,9 @@ public sealed class War
 [Serializable]
 public class WarSettings
 {
+    [Header("Decision")]
+    [Tooltip("At this progress a side may decide how the war ends (peace deal). The war never ends by itself.")]
+    [Range(0f, 100f)] public float decisionProgress = 85f;
     [Tooltip("A nation may declare war only when the relationship value is BELOW this (Force ignores it).")]
     public float declareRelationThreshold = -10f;
     [Tooltip("Declaring war sets the relationship to Enemy (also cancels alliance / pacts).")]
@@ -114,7 +119,7 @@ public class WarInfo
     public int days;
     public int occupiedProvinces;
 }
-
+public enum WarOutcome { TakeOccupied, WhitePeace, Vassalize }
 // ─────────────────────────────────────────────────────────────────────────────
 //  WAR MANAGER  (global access: WarManager.Instance)
 //
@@ -206,6 +211,8 @@ public class WarManager : TickBehaviour
     public event Action<War, Province, Nation> OnProvinceOccupationSpread;
     /// <summary>Raised when the progress of any side changed (use War.AttackerProgress / DefenderProgress).</summary>
     public event Action<War> OnWarProgressChanged;
+    /// <summary>Raised once when a side reaches decisionProgress (again if it drops below and re-reaches it).</summary>
+    public event Action<War, WarSide> OnWarDecisionAvailable;
 
     protected override int TickPriority => -750;
 
@@ -602,6 +609,41 @@ public class WarManager : TickBehaviour
         for (int i = 0; i < _tmp.Count; i++) EndWar(_tmp[i], WarResult.WhitePeace);
     }
 
+    public bool CanDecide(War war, WarSide side) =>
+    war != null && !war.Ended && side != WarSide.None && war.ProgressOf(side) >= settings.decisionProgress;
+
+    /// <summary>The side that reached decisionProgress picks what happens. Player UI and AI both call this.</summary>
+    public bool Decide(War war, WarSide winner, WarOutcome outcome)
+    {
+        LastError = null;
+        if (!CanDecide(war, winner)) return Fail("This side cannot decide yet.");
+
+        Nation winMain = World.GetNation(winner == WarSide.Attacker ? war.AttackerId : war.DefenderId);
+        Nation loseMain = World.GetNation(winner == WarSide.Attacker ? war.DefenderId : war.AttackerId);
+
+        switch (outcome)
+        {
+            case WarOutcome.TakeOccupied:
+                return EndWar(war, winner == WarSide.Attacker ? WarResult.AttackerVictory : WarResult.DefenderVictory);
+            case WarOutcome.WhitePeace:
+                return EndWar(war, WarResult.WhitePeace);
+            case WarOutcome.Vassalize:
+                if (winMain == null || loseMain == null) return Fail("Nation missing.");
+                if (!EndWar(war, WarResult.WhitePeace)) return false;     // no land changes, the loser becomes a vassal
+                return Rel.Vassalize(winMain, loseMain);
+        }
+        return false;
+    }
+
+    private void CheckDecision(War war, float a, float d)
+    {
+        float t = settings.decisionProgress;
+        if (a >= t) { if (!war.AttackerDecisionRaised) { war.AttackerDecisionRaised = true; OnWarDecisionAvailable?.Invoke(war, WarSide.Attacker); } }
+        else war.AttackerDecisionRaised = false;
+        if (d >= t) { if (!war.DefenderDecisionRaised) { war.DefenderDecisionRaised = true; OnWarDecisionAvailable?.Invoke(war, WarSide.Defender); } }
+        else war.DefenderDecisionRaised = false;
+    }
+
     /// <summary>
     /// Ends the war. Victory: the provinces occupied by the winning side change owner (to their occupier).
     /// Always: truce between the two sides, relationship of the main nations lifted to 'relationAfterPeace'.
@@ -791,6 +833,7 @@ public class WarManager : TickBehaviour
 
         war.AttackerProgress = a;
         war.DefenderProgress = d;
+        CheckDecision(war, a, d);
         OnWarProgressChanged?.Invoke(war);
     }
 

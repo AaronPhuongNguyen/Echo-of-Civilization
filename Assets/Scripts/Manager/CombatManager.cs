@@ -39,6 +39,8 @@ public class CombatSettings
     [Range(0f, 1f)] public float holdSplit = 0.25f;
     [Tooltip("A column merges when it is this close (tiles) to its regiment (or in the same province).")]
     [Min(0f)] public float mergeRadiusTiles = 3f;
+    [Tooltip("Max new columns created per scan (spreads the cost, nations are served in rotation).")]
+    [Min(1)] public int maxNewColumnsPerScan = 12;
 
     [Header("After the war")]
     [Tooltip("When a war ends, regiments standing in (or marching to) former enemy land walk back to the nearest province of their own nation (the border).")]
@@ -202,6 +204,8 @@ public class CombatManager : TickBehaviour
 
     protected override int TickPriority => -650;
 
+    private float _reinforceAcc; private int _reinforceCursor;
+
     // ─────────────────────────────────────────────────────────────────────
     //  LIFECYCLE
     // ─────────────────────────────────────────────────────────────────────
@@ -312,6 +316,12 @@ public class CombatManager : TickBehaviour
                 RunBattles(step);
             }
             if (guard >= 20) _tickAcc = 0f;
+        }
+
+        if (settings.reinforcements)
+        {
+            _reinforceAcc += deltaTime;
+            if (_reinforceAcc >= settings.reinforceInterval) { _reinforceAcc = 0f; ReinforceAll(); }
         }
 
         PaintTrails();
@@ -497,18 +507,61 @@ public class CombatManager : TickBehaviour
             return;
         }
 
-        if (settings.reinforcements)
-        {
-            b.ReinforceTimer += step;                       // was tickInterval
-            if (b.ReinforceTimer >= settings.reinforceInterval)
-            {
-                b.ReinforceTimer = 0f;
-                ReinforceSide(b, b.SideA);
-                ReinforceSide(b, b.SideB);
-            }
-        }
-
         if (b.View != null) b.View.SetNumbers(b.ManpowerA, b.ManpowerB);
+    }
+
+    private void ReinforceAll()
+    {
+        IReadOnlyList<Military> mils = ArmyManager.Instance.Militaries;
+        int count = mils.Count;
+        if (count == 0) return;
+        int budget = settings.maxNewColumnsPerScan;
+        int start = _reinforceCursor % count;
+        for (int k = 0; k < count && budget > 0; k++)
+        {
+            int idx = (start + k) % count;
+            _reinforceCursor = idx + 1;
+            Military m = mils[idx];
+            for (int i = 0; i < m.Regiments.Count && budget > 0; i++)
+                if (TryReinforce(m.Regiments[i])) budget--;
+        }
+    }
+
+    private bool TryReinforce(Regiment u)
+    {
+        if (u.IsColumn || u.Military == null) return false;
+        if (u.State == RegimentState.Retreating || u.State == RegimentState.Moving) return false;
+
+        Military m = u.Military;
+        double alloc = u.Allocation;
+        if (alloc <= 0.0 || u.Manpower >= alloc * settings.reinforceBelowPercent / 100.0) return false;
+
+        double incoming = 0.0;
+        int cols = 0;
+        for (int c = 0; c < m.Columns.Count; c++)
+        {
+            Regiment col = m.Columns[c];
+            if (col.Role == ColumnRole.Merge && col.MergeTarget == u) { incoming += col.Manpower; cols++; }
+        }
+        if (cols >= settings.maxColumnsPerRegiment) return false;
+
+        double need = alloc - u.Manpower - incoming;
+        double free = m.CurrentManpower - m.TotalRegimentManpower();
+        double men = Math.Min(Math.Min(need, free), alloc * settings.columnPercent / 100.0);
+        bool lastTopUp = men >= need - 0.5;                                  // allow a small final top-up
+        if (men < 1.0 || (men < settings.minColumnManpower && !lastTopUp)) return false;
+
+        Province exclude = u.State == RegimentState.Fighting ? u.Province : null;
+        Province from = FindSafeProvince(m.Nation, u.WorldPosition, exclude);
+        if (from == null) return false;
+
+        Regiment column = m.AddColumn(from, men);
+        if (column == null) return false;
+        column.Role = ColumnRole.Merge;
+        column.MergeTarget = u;
+        Province dest = u.LocationProvince ?? u.Province;
+        if (!ArmyManager.Instance.MoveRegiment(column, dest)) { m.RemoveColumn(column); return false; }
+        return true;
     }
 
     private static WarSide Winner(Battle b)
@@ -659,45 +712,6 @@ public class CombatManager : TickBehaviour
     // ─────────────────────────────────────────────────────────────────────
     //  REINFORCEMENT
     // ─────────────────────────────────────────────────────────────────────
-    private void ReinforceSide(Battle b, List<Regiment> side)
-    {
-        ArmyManager army = ArmyManager.Instance;
-        _tmpUnits.Clear();
-        _tmpUnits.AddRange(side);
-
-        for (int i = 0; i < _tmpUnits.Count; i++)
-        {
-            Regiment u = _tmpUnits[i];
-            if (u.IsColumn || u.Military == null || u.State != RegimentState.Fighting) continue;
-
-            Military m = u.Military;
-            double alloc = u.Allocation;
-            if (alloc <= 0.0 || u.Manpower >= alloc * settings.reinforceBelowPercent / 100.0) continue;
-
-            double incoming = 0.0;
-            int cols = 0;
-            for (int c = 0; c < m.Columns.Count; c++)
-            {
-                Regiment col = m.Columns[c];
-                if (col.Role == ColumnRole.Merge && col.MergeTarget == u) { incoming += col.Manpower; cols++; }
-            }
-            if (cols >= settings.maxColumnsPerRegiment) continue;
-
-            double need = alloc - u.Manpower - incoming;
-            double free = m.CurrentManpower - m.TotalRegimentManpower();
-            double men = Math.Min(Math.Min(need, free), alloc * settings.columnPercent / 100.0);
-            if (men < settings.minColumnManpower) continue;              // not enough manpower: no reinforcement
-
-            Province from = FindSafeProvince(m.Nation, b.WorldPos, b.Province);
-            if (from == null) continue;
-
-            Regiment column = m.AddColumn(from, men);
-            if (column == null) continue;
-            column.Role = ColumnRole.Merge;
-            column.MergeTarget = u;
-            if (!army.MoveRegiment(column, b.Province)) m.RemoveColumn(column);
-        }
-    }
 
     /// <summary>A main regiment starts retreating: its columns split (holdSplit hold the enemy, the rest follow it).</summary>
     private void HandleRetreat(Regiment r, Province target)

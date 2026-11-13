@@ -314,6 +314,7 @@ public class AIManager : TickBehaviour
     private void RunEconomy(AIState st)
     {
         Nation n = st.Nation;
+        ManageRegimentCount(st);
         bool war = WM.IsAtWar(n);
         double reserve = n.MaxTreasury * (war ? settings.warReserve : settings.peaceReserve);
         for (int i = 0; i < settings.maxIncreasesPerRound; i++)
@@ -392,6 +393,27 @@ public class AIManager : TickBehaviour
         }
         for (int k = 4; k >= 0; k--) if (_sw[k] > 0f) { stat = (StatType)k; return true; }
         return false;
+    }
+
+    /// <summary>More manpower -> more regiments. Grows one regiment per economy round, shrinks only in peace.</summary>
+    private void ManageRegimentCount(AIState st)
+    {
+        Military m = Army.GetMilitary(st.Nation);
+        if (m == null) return;
+        int want = Army.DesiredRegiments(m), have = m.Regiments.Count;
+
+        if (have < want)
+        {
+            double free = m.CurrentManpower - m.TotalRegimentManpower();
+            if (free < Army.manpowerPerRegiment * 0.25) return;               // no men to fill a new regiment
+            if (st.SharesCustom) { m.ResetShares(); st.SharesCustom = false; }
+            m.AddRegiment();
+        }
+        else if (have > want + 1 && !WM.IsAtWar(st.Nation))
+        {
+            for (int i = m.Regiments.Count - 1; i >= 0; i--)
+                if (m.Regiments[i].State == RegimentState.Idle) { m.RemoveRegiment(m.Regiments[i]); break; }   // men go back to the reserve
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1185,11 +1207,7 @@ public class AIManager : TickBehaviour
             War w = _tmpWars[i];
             if (w.Ended || !w.IsMain(n.Id)) continue;
             WarSide side = w.SideOf(n.Id);
-            if (w.ProgressOf(side) >= settings.winProgress)
-            {
-                if (side == WarSide.Attacker) WM.AttackerWins(w); else WM.DefenderWins(w);
-                continue;
-            }
+            if (WM.CanDecide(w, side)) { AIDecide(st, w, side); continue; }
             if (side == WarSide.Attacker && w.DaysActive >= settings.stalemateDays &&
                 w.AttackerProgress < 60f && w.DefenderProgress < 60f)
             {
@@ -1197,6 +1215,16 @@ public class AIManager : TickBehaviour
                 if (other != null && other.IsAI) WM.WhitePeace(w);
             }
         }
+    }
+
+    private void AIDecide(AIState st, War w, WarSide side)
+    {
+        Nation loser = World.GetNation(side == WarSide.Attacker ? w.DefenderId : w.AttackerId);
+        bool vassal = settings.allowVassalize && st.Aggression > 0.5f && loser != null &&
+                      Rel.GetOverlord(loser) == null && Power(st.Nation) > Power(loser) * 2.0 &&
+                      RNG.GetFloat(0f, 1f) < 0.5f;
+        if (vassal && WM.Decide(w, side, WarOutcome.Vassalize)) return;
+        WM.Decide(w, side, WarOutcome.TakeOccupied);
     }
 
     [ContextMenu("AI: Log States")]

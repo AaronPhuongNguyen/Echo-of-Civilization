@@ -239,25 +239,10 @@ public sealed class Military
 
         ClampRegiments();
 
-        double free = Math.Max(0.0, CurrentManpower - TotalRegimentManpower());
         for (int i = 0; i < Regiments.Count; i++)
         {
             Regiment r = Regiments[i];
-            if (r.State != RegimentState.Idle && r.State != RegimentState.Reinforcing) continue;   // no refill while marching / fighting / retreating
-
-            double alloc = r.Allocation;
-            double need = alloc - r.Manpower;
-            if (need > 0.0 && free > 0.0)
-            {
-                double gain = Math.Min(Math.Min(need, alloc * army.reinforcePerDay), free);
-                if (gain > 0.0)
-                {
-                    r.Manpower += gain;
-                    free -= gain;
-                    r.RefreshText();
-                }
-            }
-            if (r.State == RegimentState.Reinforcing && r.Manpower >= alloc * 0.999) r.State = RegimentState.Idle;
+            if (r.State == RegimentState.Reinforcing && r.Manpower >= r.Allocation * 0.999) r.State = RegimentState.Idle;
         }
     }
 }
@@ -345,7 +330,11 @@ public class ArmyManager : TickBehaviour
 
     // ── regiments ──
     [Header("Regiments")]
-    [Min(0)] public int defaultRegiments = 10;
+    [Tooltip("Regiments = MaxManpower / this (clamped). At full mobilization a regiment holds about this many men.")]
+    [Min(1f)] public float manpowerPerRegiment = 10000f;
+    [Min(1)] public int minRegiments = 1;
+    [Min(1)] public int maxRegiments = 30;
+
     [Range(0f, 100f)] public float retreatManpowerPercent = 10f;
     [Min(0f)] public float MinManpowerToRetreat = 5000f;
     [Range(0f, 1f)] public float reinforcePerDay = 0.02f;
@@ -434,6 +423,11 @@ public class ArmyManager : TickBehaviour
     public event Action<Regiment> OnRegimentArrived;
 
     protected override int TickPriority => -700;
+
+
+    public int DesiredRegiments(Military m) =>
+        Mathf.Clamp(Mathf.RoundToInt((float)(m.MaxManpower / Math.Max(1f, manpowerPerRegiment))),
+                    Mathf.Max(1, minRegiments), Mathf.Max(minRegiments, maxRegiments));
 
     // ─────────────────────────────────────────────────────────────────────
     //  LIFECYCLE
@@ -544,7 +538,7 @@ public class ArmyManager : TickBehaviour
         _militaries.Add(n.Id, m);
         _list.Add(m);
 
-        m.AddRegiments(defaultRegiments);
+        m.AddRegiments(DesiredRegiments(m));
         return m;
     }
 
@@ -967,45 +961,15 @@ public class ArmyManager : TickBehaviour
     {
         result = null;
         Nation own = r.Military.Nation;
-        int total = own.Provinces.Count;
-
-        List<Nation> allies = null;
-        if (RelationshipManager.HasInstance)
+        float best = float.MaxValue;
+        for (int i = 0; i < own.Provinces.Count; i++)
         {
-            RelationshipManager rel = RelationshipManager.Instance;
-            IReadOnlyList<Nation> all = WorldManager.Instance.Nations;
-            for (int i = 0; i < all.Count; i++)
-            {
-                Nation o = all[i];
-                if (o == own || o.IsEmpty || !rel.IsAllied(own, o)) continue;
-                if (allies == null) allies = new List<Nation>();
-                allies.Add(o);
-                total += o.Provinces.Count;
-            }
+            Province p = own.Provinces[i];
+            if (p == r.Province) continue;
+            float d = (ProvinceWorldPos(p) - r.WorldPosition).sqrMagnitude;
+            if (d < best) { best = d; result = p; }
         }
-        if (total == 0) return false;
-
-        Province pick = null;
-        for (int t = 0; t < 8; t++)
-        {
-            pick = ProvinceAtIndex(own, allies, RNG.GetInt(0, total));
-            if (pick != r.Province) break;
-        }
-        result = pick;
-        return pick != null;
-    }
-
-    private static Province ProvinceAtIndex(Nation own, List<Nation> allies, int index)
-    {
-        if (index < own.Provinces.Count) return own.Provinces[index];
-        index -= own.Provinces.Count;
-        if (allies != null)
-            for (int i = 0; i < allies.Count; i++)
-            {
-                if (index < allies[i].Provinces.Count) return allies[i].Provinces[index];
-                index -= allies[i].Provinces.Count;
-            }
-        return null;
+        return result != null;
     }
 
     // ─────────────────────────────────────────────────────────────────────

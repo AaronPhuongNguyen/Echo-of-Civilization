@@ -818,6 +818,7 @@ GameObject:
   m_Component:
   - component: {fileID: 833740665}
   - component: {fileID: 833740667}
+  - component: {fileID: 833740668}
   m_Layer: 0
   m_Name: Managers
   m_TagString: Untagged
@@ -872,6 +873,47 @@ MonoBehaviour:
   nationsView: []
   popGrowthYears: 5
   popGrowthBase: 5000
+--- !u!114 &833740668
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 833740664}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7ea675d99b0935f418bbc31e7f374c8a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  settings:
+    minPartProvinces: 2
+    splitRelation: {x: 0, y: 30}
+    aiFormation: 1
+    maxMembers: 4
+    requiredPowerRatio: 1.5
+    minRelationToAsk: 0
+    askChance: 0.35
+    allyBonus: 0.15
+    refusePenalty: 5
+    askCooldownDays: 180
+    aiMayAskPlayer: 0
+    peaceDrift: 0.6
+    warDrift: -1.5
+    weakArmyPercent: 30
+    weakArmyDrift: -1
+    sizeDrift: -0.3
+    lostLandFactor: 10
+    noise: 0.4
+    demandBelow: 20
+    warGrantFactor: 0.5
+    failedRelation: -20
+    rebelWarDelayDays: 60
+    releaseRelation: 25
+  map: {fileID: 0}
+  debugNationA: -1
+  debugNationB: -1
+  debugParts: 3
+  empiresView: []
 --- !u!1 &929751827
 GameObject:
   m_ObjectHideFlags: 0
@@ -1332,7 +1374,7 @@ MonoBehaviour:
       Percent: 0
       Total: 1
     minNations: 2
-    maxNations: 2
+    maxNations: 24
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
     waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}
