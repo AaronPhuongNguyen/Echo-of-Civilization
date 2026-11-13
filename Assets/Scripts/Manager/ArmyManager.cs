@@ -519,6 +519,7 @@ public class ArmyManager : TickBehaviour
         _militaries.Clear();
         _moving.Clear();
         _prepDirty = false;
+        _seaGrid = null;
     }
 
     private void HandleNationRemoved(Nation n)
@@ -674,6 +675,7 @@ public class ArmyManager : TickBehaviour
     /// <summary>Fallback BFS: land neighbours plus any province within seaRangeTiles (a sea crossing).</summary>
     private bool SeaSearch(Province from, Province to, Nation restrictTo, HashSet<int> avoid)
     {
+        if (_seaGrid == null) BuildSeaGrid();
         IReadOnlyList<Province> all = map.Provinces;
         _stamp++;
         _bfsQ.Clear();
@@ -682,24 +684,32 @@ public class ArmyManager : TickBehaviour
         _bfsPrev[from.Id] = -1;
 
         float r2 = seaRangeTiles * seaRangeTiles;
+        int visited = 0;
         while (_bfsQ.Count > 0)
         {
             int c = _bfsQ.Dequeue();
             if (c == to.Id) return true;
+            if (++visited > maxSeaNodes) return false;          // hard cap: no more freezes
             Province pc = all[c];
+            int cx = (int)(pc.Centroid.x / _seaCell), cy = (int)(pc.Centroid.y / _seaCell);
 
-            for (int m = 0; m < all.Count; m++)
-            {
-                if (_bfsStamp[m] == _stamp) continue;
-                Province q = all[m];
-                if (q.IsMerged || q.Tiles == null || q.Tiles.Length == 0) continue;
-                if ((q.Centroid - pc.Centroid).sqrMagnitude > r2) continue;
-                if (restrictTo != null && !CanEnter(restrictTo, q)) continue;
-                if (avoid != null && m != to.Id && avoid.Contains(m)) continue;
-                _bfsStamp[m] = _stamp;
-                _bfsPrev[m] = c;
-                _bfsQ.Enqueue(m);
-            }
+            for (int gx = cx - 1; gx <= cx + 1; gx++)
+                for (int gy = cy - 1; gy <= cy + 1; gy++)
+                {
+                    if (!_seaGrid.TryGetValue(CellKey(gx, gy), out List<int> cell)) continue;
+                    for (int i = 0; i < cell.Count; i++)
+                    {
+                        int m = cell[i];
+                        if (_bfsStamp[m] == _stamp) continue;
+                        Province q = all[m];
+                        if ((q.Centroid - pc.Centroid).sqrMagnitude > r2) continue;
+                        if (restrictTo != null && !CanEnter(restrictTo, q)) continue;
+                        if (avoid != null && m != to.Id && avoid.Contains(m)) continue;
+                        _bfsStamp[m] = _stamp;
+                        _bfsPrev[m] = c;
+                        _bfsQ.Enqueue(m);
+                    }
+                }
         }
         return false;
     }
@@ -925,6 +935,28 @@ public class ArmyManager : TickBehaviour
         r.View = null;
         if (PoolManager.HasInstance) PoolManager.Instance.Despawn(v.gameObject);
         else Destroy(v.gameObject);
+    }
+
+    [Min(100)] public int maxSeaNodes = 2500;
+
+    private Dictionary<long, List<int>> _seaGrid;
+    private float _seaCell;
+
+    private static long CellKey(int cx, int cy) => ((long)cx << 32) | (uint)cy;
+
+    private void BuildSeaGrid()
+    {
+        _seaCell = Mathf.Max(1f, seaRangeTiles);
+        _seaGrid = new Dictionary<long, List<int>>();
+        IReadOnlyList<Province> all = map.Provinces;
+        for (int i = 0; i < all.Count; i++)
+        {
+            Province p = all[i];
+            if (p.IsMerged || p.Tiles == null || p.Tiles.Length == 0) continue;
+            long k = CellKey((int)(p.Centroid.x / _seaCell), (int)(p.Centroid.y / _seaCell));
+            if (!_seaGrid.TryGetValue(k, out List<int> l)) _seaGrid[k] = l = new List<int>();
+            l.Add(i);
+        }
     }
 
     /// <summary>"Regiments" object stretched over the screen canvas (created once).</summary>

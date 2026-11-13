@@ -212,44 +212,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 85bd27249b4b43e43a872778ee8083bb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  map: {fileID: 0}
-  provinceId: 0
-  increaseStat: 1
-  followLongPress: 1
-  provinceName: 
-  population: 0
-  devastation: 0
-  tax:
-    Base: 0
-    Flat: 0
-    Percent: 0
-    Total: 1
-  economy:
-    Base: 0
-    Flat: 0
-    Percent: 0
-    Total: 1
-  defend:
-    Base: 0
-    Flat: 0
-    Percent: 0
-    Total: 1
-  popGrowth:
-    Base: 0
-    Flat: 0
-    Percent: 0
-    Total: 1
-  infrastructure:
-    Base: 0
-    Flat: 0
-    Percent: 0
-    Total: 1
-  productionIncome:
-    Base: 1
-    Flat: 0
-    Percent: 0
-    Total: 1
-  info: 
+  startOpen: 1
+  fontSize: 50
+  buttonHeight: 70
 --- !u!1 &244872683
 GameObject:
   m_ObjectHideFlags: 0
@@ -336,17 +301,17 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   siege:
     enabled: 1
-    checkInterval: 1.5
-    maxPocketProvinces: 20
+    checkInterval: 1
+    maxPocketProvinces: 100
     minRingRegiments: 2
     attritionPerSecond: 0.0004
     supportEnabled: 1
-    supportRadiusTiles: 200
+    supportRadiusTiles: 300
     scaleWithMapSize: 1
     supportScanInterval: 3
-    maxSupportersPerBattle: 6
-    supportMinStrength: 0.4
-    supportWinRatio: 1.4
+    maxSupportersPerBattle: 10
+    supportMinStrength: 0.3
+    supportWinRatio: 1.3
     supportOwnNation: 1
     supportPlayerArmies: 1
   settings:
@@ -364,10 +329,10 @@ MonoBehaviour:
       Percent: 0
       Total: 1
     hpLostPerManpower: 5
-    damageScale: 0.03
+    damageScale: 0.01
     useDice: 1
     diceDamageBonus:
-      Base: 0.25
+      Base: 1
       Flat: 0
       Percent: 0
       Total: 1
@@ -392,8 +357,8 @@ MonoBehaviour:
   defendLogo: {fileID: 21300000, guid: b7fe80fa6f21e0c419dce02e1c1da4f7, type: 3}
   backgroundSprite: {fileID: 21300000, guid: 7177f0c0913cf86468c79ba6887cd4fd, type: 3}
   battleCardScale: 1.75
-  trailRadiusTiles: 3
-  trailAlpha: 0.6
+  trailRadiusTiles: 4
+  trailAlpha: 0.75
   overlayMaxSize: 1024
   overlaySortingOrder: 2
   debugNationA: -1
@@ -1425,8 +1390,8 @@ MonoBehaviour:
       Flat: 0
       Percent: 0
       Total: 1
-    minNations: 6
-    maxNations: 6
+    minNations: 10
+    maxNations: 10
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
     waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}
@@ -1627,15 +1592,15 @@ MonoBehaviour:
   regimentSize: 60
   backgroundAlpha: 1
   manpowerRecoveryYears: 12
-  defaultPreparationLevel: 1
-  prepStepInterval: 0.5
-  prepStepPercent: 1
+  defaultPreparationLevel: 2
+  prepStepInterval: 0.1
+  prepStepPercent: 0.2
   manpowerPerRegiment: 10000
   minRegiments: 1
-  maxRegiments: 30
+  maxRegiments: 50
   retreatManpowerPercent: 10
   MinManpowerToRetreat: 10000
-  reinforcePerDay: 0.02
+  reinforcePerDay: 0.03
   retreatSpeedTiles: 8
   stackSpacing: 1.1
   viewCamera: {fileID: 0}
@@ -1644,12 +1609,16 @@ MonoBehaviour:
   debugNation: -1
   debugRegiment: -1
   debugAmount: 20
+  allowSeaMovement: 1
+  seaSpeedFactor: 0.5
+  seaRangeTiles: 100
   showMilitaryInInspector: 1
   militaryView: []
   debugShowWarManpower: 1
   debugLabelFill: 0.75
   moveSpeedTiles: 4
   reinforceSpeedTiles: 6
+  maxSeaNodes: 2500
 --- !u!1 &2035398686
 GameObject:
   m_ObjectHideFlags: 0

@@ -538,6 +538,8 @@ public class WarManager : TickBehaviour
         {
             Nation o = all[i];
             if (o == leader || o.IsEmpty || war.SideOf(o.Id) != WarSide.None) continue;
+            Nation other = side == WarSide.Attacker ? World.GetNation(war.DefenderId) : World.GetNation(war.AttackerId);
+            if (other != null && rel.IsAllied(other, o) && rel.IsAllied(leader, o)) continue;
 
             bool join = false;
             if (settings.callAllies && rel.IsAllied(leader, o)) join = true;
