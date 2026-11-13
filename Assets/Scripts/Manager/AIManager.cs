@@ -15,6 +15,13 @@ public class AISettings
     [Min(0.2f)] public float militaryInterval = 1.5f;
     [Tooltip("Max nations that think per tick (spreads the CPU cost).")]
     [Min(1)] public int nationsPerTick = 4;
+    [Tooltip("Defender attacks back when the war had no battle and no occupation for this many game days.")]
+    [Min(1)] public int counterAttackAfterDays = 30;
+
+    [Header("Peace demands")]
+    [Tooltip("Share of the available war score the AI is willing to spend on provinces.")]
+    [Range(0.1f, 1f)] public float demandSpend = 1f;
+    [Min(1)] public int maxDemandProvinces = 40;
 
     [Header("Personality (random per nation)")]
     public Vector2 aggressionRange = new Vector2(0.1f, 0.9f);
@@ -68,6 +75,18 @@ public class AISettings
     [Tooltip("AI vs AI wars older than this (days) with nobody above 60% end in white peace.")]
     public int stalemateDays = 1080;
     public bool allowVassalize = false;
+
+    [Header("Province merging")]
+    public bool mergeProvinces = true;
+    [Min(30)] public int mergeIntervalDays = 120;
+    [Tooltip("The AI never merges a nation below this many provinces.")]
+    [Min(2)] public int mergeMinProvinces = 8;
+    [Tooltip("A province smaller than (average nation province * this) counts as 'small' and is merged first.")]
+    [Range(0.05f, 1f)] public float mergeSmallFactor = 0.6f;
+    [Range(2, 8)] public int mergeGroupSize = 3;
+    [Tooltip("Chance that the merged province gets a NEW name instead of the leader's.")]
+    [Range(0f, 1f)] public float mergeNewNameChance = 0.4f;
+    public bool mergeOnlyInPeace = true;
 }
 
 public enum AIMass : byte { None = 0, Massing = 1 }
@@ -130,6 +149,7 @@ public class AIManager : TickBehaviour
         public Province Staging, Strike;
         public float MassSince;
         public bool SharesCustom;
+        public long NextMerge;
     }
 
     private struct Threat { public Province P; public double Men; public float Pri; }
@@ -166,6 +186,16 @@ public class AIManager : TickBehaviour
     private readonly List<int> _order = new List<int>();
     private readonly float[] _sw = new float[5];
     private readonly float[] _sb = new float[5];
+    private readonly List<Province> _cand = new List<Province>();
+    private readonly List<int> _demand = new List<int>();
+    private readonly HashSet<int> _mine = new HashSet<int>();
+    private readonly HashSet<int> _candSet = new HashSet<int>();
+    private readonly Dictionary<int, float> _cost = new Dictionary<int, float>();
+    private readonly Dictionary<int, float> _dist = new Dictionary<int, float>();
+    private readonly Dictionary<int, int> _prev = new Dictionary<int, int>();
+    private readonly HashSet<int> _done = new HashSet<int>();
+    private readonly List<Province> _open = new List<Province>();
+    private readonly List<Province> _mergeBuf = new List<Province>();
 
     private WarManager WM => WarManager.Instance;
     private ArmyManager Army => ArmyManager.Instance;
@@ -277,6 +307,69 @@ public class AIManager : TickBehaviour
             _list.Add(st);
         }
     }
+    // ─────────────────────────────────────────────────────────────────────
+    //  PROVINCE MERGING: small provinces are folded into one clean province
+    //   seed   : the smallest 'small' province that touches another own province
+    //   leader : the most valuable province of the group (capital > population); its name is used,
+    //            or (mergeNewNameChance) a brand new name
+    // ─────────────────────────────────────────────────────────────────────
+    private void RunMerge(AIState st)
+    {
+        Nation n = st.Nation;
+        if (map == null || !map.IsReady || n.IsEmpty) return;
+        if (settings.mergeOnlyInPeace && WM.IsAtWar(n)) return;
+
+        int spare = n.ProvinceCount - settings.mergeMinProvinces;       // how many provinces may disappear
+        if (spare < 1) return;
+
+        float limit = (float)((double)n.Area / n.ProvinceCount) * settings.mergeSmallFactor;
+        Province seed = null;
+        for (int i = 0; i < n.Provinces.Count; i++)
+        {
+            Province p = n.Provinces[i];
+            if (p.TileCount >= limit || (seed != null && p.TileCount >= seed.TileCount)) continue;
+            if (!HasOwnNeighbour(p, n)) continue;
+            seed = p;
+        }
+        if (seed == null) return;
+
+        int size = Mathf.Min(settings.mergeGroupSize, spare + 1);
+        if (!map.FindMergeGroup(seed, size, _mergeBuf)) return;
+
+        Province leader = _mergeBuf[0];
+        for (int i = 1; i < _mergeBuf.Count; i++)
+        {
+            Province p = _mergeBuf[i];
+            if (leader.IsCapital) break;
+            if (p.IsCapital || p.Population > leader.Population) leader = p;
+        }
+
+        string name = RNG.GetFloat(0f, 1f) < settings.mergeNewNameChance ? map.GenerateProvinceName() : null;
+        map.MergeProvinces(leader, _mergeBuf, name);                    // failed merges are simply skipped
+    }
+
+    private bool HasOwnNeighbour(Province p, Nation n)
+    {
+        int[] nb = p.Neighbors;
+        for (int i = 0; i < nb.Length; i++)
+        {
+            Province q = map.GetProvince(nb[i]);
+            if (q != null && q.Owner == n) return true;
+        }
+        return false;
+    }
+
+    private void HandleMerged(Province origin, IReadOnlyList<Province> absorbed)
+    {
+        foreach (var kv in _states)
+        {
+            AIState s = kv.Value;
+            if ((s.Staging != null && s.Staging.IsMerged) || (s.Strike != null && s.Strike.IsMerged))
+            {
+                s.Staging = null; s.Strike = null; s.Mass = AIMass.None;
+            }
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     //  DAILY: economy, diplomacy, war end
@@ -301,6 +394,15 @@ public class AIManager : TickBehaviour
             {
                 st.NextDiplomacy = today + settings.diplomacyIntervalDays + RNG.GetInt(0, 5);
                 RunDiplomacy(st, today);
+            }
+            if (settings.mergeProvinces)
+            {
+                if (st.NextMerge == 0) st.NextMerge = today + RNG.GetInt(30, settings.mergeIntervalDays + 1);   // staggered
+                else if (today >= st.NextMerge)
+                {
+                    st.NextMerge = today + settings.mergeIntervalDays + RNG.GetInt(0, 30);
+                    RunMerge(st);
+                }
             }
         }
     }
@@ -682,6 +784,8 @@ public class AIManager : TickBehaviour
     // ─────────────────────────────────────────────────────────────────────
     private void CommandWar(AIState st, Military m)
     {
+        
+
         Nation n = st.Nation;
         WM.GetEnemies(n, _enemies);
         if (_enemies.Count == 0) return;
@@ -698,10 +802,22 @@ public class AIManager : TickBehaviour
         }
         if (_free.Count == 0) return;
 
-        AssignDefence(st, m, defender);
+        bool passive = defender && !IdleAsDefender(n);       // waiting too long -> stop being passive
+
+        AssignDefence(st, m, passive);
         AssignLiberation(st, m);
-        Offense(st, m, defender);
-        if (defender) Rally(st, m);
+        Offense(st, m, passive);
+        if (passive) Rally(st, m);
+    }
+
+    private bool IdleAsDefender(Nation n)
+    {
+        long today = DateManager.Instance.TotalDays;
+        IReadOnlyList<War> wars = WM.GetWars(n);
+        for (int i = 0; i < wars.Count; i++)
+            if (wars[i].SideOf(n.Id) == WarSide.Defender && today - wars[i].LastActivityDay >= settings.counterAttackAfterDays)
+                return true;
+        return false;
     }
 
     private void AddThreat(Nation me, Province p, double men)
@@ -1224,7 +1340,165 @@ public class AIManager : TickBehaviour
                       Rel.GetOverlord(loser) == null && Power(st.Nation) > Power(loser) * 2.0 &&
                       RNG.GetFloat(0f, 1f) < 0.5f;
         if (vassal && WM.Decide(w, side, WarOutcome.Vassalize)) return;
-        WM.Decide(w, side, WarOutcome.TakeOccupied);
+
+        if (TryDemand(st, w, side)) return;
+        WM.Decide(w, side, WarOutcome.TakeOccupied);      // fallback: nothing affordable / sensible
+    }
+
+    /// <summary>Spends the war score on the most valuable provinces for their price, staying connected to our land.</summary>
+    private bool TryDemand(AIState st, War w, WarSide side)
+    {
+        List<int> loserIds = side == WarSide.Attacker ? w.Defenders : w.Attackers;
+
+        _cand.Clear(); _demand.Clear(); _mine.Clear(); _candSet.Clear(); _cost.Clear();
+        for (int i = 0; i < loserIds.Count; i++)
+        {
+            Nation n = World.GetNation(loserIds[i]);
+            if (n == null) continue;
+            for (int j = 0; j < n.Provinces.Count; j++)
+            {
+                Province p = n.Provinces[j];
+                _cand.Add(p);
+                _candSet.Add(p.Id);
+                _cost[p.Id] = WM.GetProvinceCost(w, side, p);
+            }
+        }
+        if (_cand.Count == 0) return false;
+
+        // our land (and allies' land) = where new provinces attach
+        foreach (int id in side == WarSide.Attacker ? w.Attackers : w.Defenders)
+        {
+            Nation a = World.GetNation(id);
+            if (a == null) continue;
+            for (int j = 0; j < a.Provinces.Count; j++) _mine.Add(a.Provinces[j].Id);
+        }
+
+        float budget = WM.GetDemandBudget(w, side) * settings.demandSpend;
+
+        // 1) best potential province + the whole corridor to it; repeat while score remains
+        while (_demand.Count < settings.maxDemandProvinces && budget > 0f)
+        {
+            if (!PlanCorridor(w, side, budget, out float spent)) break;
+            budget -= spent;
+        }
+
+        // 2) nothing valid -> just take what is nearest to the border
+        if (_demand.Count == 0) FillNearBorder(w, side, budget);
+
+        if (_demand.Count == 0) return false;
+        return WM.Decide(w, side, _demand);
+    }
+
+    /// <summary>Finds the most desirable province whose cheapest corridor from our land is affordable, and adds the corridor to the demand.</summary>
+    private bool PlanCorridor(War w, WarSide side, float budget, out float spent)
+    {
+        spent = 0f;
+        _dist.Clear(); _prev.Clear(); _done.Clear(); _open.Clear();
+
+        // sources: enemy provinces that already touch our land / occupied land
+        for (int i = 0; i < _cand.Count; i++)
+        {
+            Province p = _cand[i];
+            if (!_candSet.Contains(p.Id) || !Touches(w, side, p)) continue;
+            float c = _cost[p.Id];
+            if (c > budget) continue;
+            _dist[p.Id] = c; _prev[p.Id] = -1; _open.Add(p);
+        }
+
+        // cheapest-path search through enemy provinces
+        while (_open.Count > 0)
+        {
+            int bi = 0;
+            for (int i = 1; i < _open.Count; i++)
+                if (_dist[_open[i].Id] < _dist[_open[bi].Id]) bi = i;
+            Province cur = _open[bi];
+            _open[bi] = _open[_open.Count - 1];
+            _open.RemoveAt(_open.Count - 1);
+            if (!_done.Add(cur.Id)) continue;
+
+            float dc = _dist[cur.Id];
+            int[] nb = cur.Neighbors;
+            for (int i = 0; i < nb.Length; i++)
+            {
+                int id = nb[i];
+                if (!_candSet.Contains(id) || _done.Contains(id)) continue;
+                float nd = dc + _cost[id];
+                if (nd > budget) continue;
+                if (_dist.TryGetValue(id, out float old) && old <= nd) continue;
+                _dist[id] = nd; _prev[id] = cur.Id;
+                _open.Add(map.GetProvince(id));
+            }
+        }
+
+        // the potential target: highest desire among everything reachable within budget
+        Province target = null;
+        float bestDesire = -1f;
+        foreach (int id in _done)
+        {
+            int len = 0;
+            for (int c = id; c != -1; c = _prev[c]) len++;
+            if (_demand.Count + len > settings.maxDemandProvinces) continue;
+
+            float d = Desire(map.GetProvince(id));
+            if (d > bestDesire) { bestDesire = d; target = map.GetProvince(id); }
+        }
+        if (target == null) return false;
+
+        // take the target and everything on the way to it
+        spent = _dist[target.Id];
+        for (int c = target.Id; c != -1; c = _prev[c])
+        {
+            _demand.Add(c);
+            _mine.Add(c);
+            _candSet.Remove(c);
+        }
+        return true;
+    }
+
+    /// <summary>Fallback: provinces touching our border, cheapest first, until the budget is gone.</summary>
+    private void FillNearBorder(War w, WarSide side, float budget)
+    {
+        while (_demand.Count < settings.maxDemandProvinces)
+        {
+            Province best = null;
+            float bestCost = float.MaxValue;
+            for (int i = 0; i < _cand.Count; i++)
+            {
+                Province p = _cand[i];
+                if (!_candSet.Contains(p.Id) || !Touches(w, side, p)) continue;
+                float c = _cost[p.Id];
+                if (c <= budget && c < bestCost) { bestCost = c; best = p; }
+            }
+            if (best == null) break;
+            _demand.Add(best.Id);
+            _mine.Add(best.Id);
+            _candSet.Remove(best.Id);
+            budget -= bestCost;
+        }
+    }
+
+    private bool Touches(War w, WarSide side, Province p)
+    {
+        if (w.Occupied.TryGetValue(p.Id, out int occ) && w.SideOf(occ) == side) return true;   // we already stand there
+        int[] nb = p.Neighbors;
+        for (int i = 0; i < nb.Length; i++) if (_mine.Contains(nb[i])) return true;
+        return false;
+    }
+
+    /// <summary>How attractive a province is: income, population, growth, defence, capital.</summary>
+    private float Desire(Province p)
+    {
+        Nation o = p.Owner;
+        int c = o != null ? Mathf.Max(1, o.ProvinceCount) : 1;
+        float avgI = o != null ? (float)(o.Economy / c) + 0.0001f : 1f;
+        float avgP = o != null ? (float)(o.Population / c) + 1f : 1f;
+
+        float v = 0.4f * Mathf.Clamp(p.Income / avgI, 0f, 4f)
+                + 0.3f * Mathf.Clamp(p.Population / avgP, 0f, 4f)
+                + 0.15f * Mathf.Clamp(p.PopGrowth.Value / 0.13f, 0f, 3f)
+                + 0.1f * Mathf.Clamp(p.Defend.Value / 0.3f, 0f, 3f);
+        if (p.IsCapital) v += 1f;
+        return v + 0.05f;
     }
 
     [ContextMenu("AI: Log States")]

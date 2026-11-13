@@ -23,6 +23,8 @@ public class CombatSettings
     public GameValue bonusDamage = new GameValue(0.5f);
     [Tooltip("Every this many HP lost = 1 manpower lost.")]
     [Min(1f)] public float hpLostPerManpower = 5f;
+    [Tooltip("Global multiplier of the ATK/DEF damage. Raise = faster battles, lower = slower.")]
+    [Min(0.0001f)] public float damageScale = 0.01f;
 
     [Header("Reinforcement")]
     public bool reinforcements = true;
@@ -41,6 +43,17 @@ public class CombatSettings
     [Min(0f)] public float mergeRadiusTiles = 3f;
     [Tooltip("Max new columns created per scan (spreads the cost, nations are served in rotation).")]
     [Min(1)] public int maxNewColumnsPerScan = 12;
+
+    [Header("Occupation columns (independent of critical reinforcement)")]
+    public bool occupationColumns = true;
+    [Tooltip("Every nation at war sends one small column this often (game days).")]
+    [Min(1)] public int occupierIntervalDays = 7;
+    [Tooltip("Column size = this percent of ArmyManager.manpowerPerRegiment.")]
+    [Range(0.1f, 50f)] public float occupierPercent = 5f;
+    [Min(1f)] public float occupierMinManpower = 100f;
+    [Min(1)] public int maxOccupiersPerNation = 3;
+    [Tooltip("How many provinces one column claims before it goes home.")]
+    [Min(1)] public int occupierMaxHops = 4;
 
     [Header("After the war")]
     [Tooltip("When a war ends, regiments standing in (or marching to) former enemy land walk back to the nearest province of their own nation (the border).")]
@@ -180,6 +193,11 @@ public class CombatManager : TickBehaviour
     private readonly List<Regiment> _tmpUnits = new List<Regiment>();
     private readonly List<Regiment> _tmpCols = new List<Regiment>();
     private readonly List<War> _tmpWars = new List<War>();
+    private readonly Dictionary<int, long> _nextOccupier = new Dictionary<int, long>();
+    private readonly Dictionary<Regiment, int> _hops = new Dictionary<Regiment, int>();
+    private readonly List<War> _dayWars = new List<War>();
+    private readonly List<Regiment> _staleBuf = new List<Regiment>();
+    private readonly HashSet<int> _seenTargets = new HashSet<int>();
     private BattleView _template;
     private int _nextId = 1;
     private float _detectAcc, _tickAcc;
@@ -244,6 +262,7 @@ public class CombatManager : TickBehaviour
         wm.OnProvinceOccupationSpread += HandleSpread;
         wm.OnWarEnded += HandleWarEnded;
         WorldManager.Instance.OnNationsCleared += ClearAll;
+        DateManager.Instance.OnDayPassed += HandleDay;
 
         if (map != null)
         {
@@ -259,6 +278,7 @@ public class CombatManager : TickBehaviour
         {
             ArmyManager.Instance.OnRegimentRetreat -= HandleRetreat;
             ArmyManager.Instance.OnRegimentArrived -= HandleArrived;
+
         }
         if (WarManager.HasInstance)
         {
@@ -267,6 +287,7 @@ public class CombatManager : TickBehaviour
             WarManager.Instance.OnWarEnded -= HandleWarEnded;
         }
         if (WorldManager.HasInstance) WorldManager.Instance.OnNationsCleared -= ClearAll;
+        if (DateManager.HasInstance) DateManager.Instance.OnDayPassed -= HandleDay;
         if (map != null) map.OnMapGenerated -= BuildOverlay;
         if (_instance == this && _quitting) _instance = null;
     }
@@ -288,6 +309,7 @@ public class CombatManager : TickBehaviour
         _battleAt.Clear();
         _index.Clear();
         _occupier.Clear();
+        _nextOccupier.Clear(); _hops.Clear();
         DestroyOverlay();
     }
 
@@ -338,9 +360,8 @@ public class CombatManager : TickBehaviour
     // ─────────────────────────────────────────────────────────────────────
     //  DETECTION: who stands where, who meets whom
     // ─────────────────────────────────────────────────────────────────────
-    private static bool IsFighter(Regiment r) =>
-        r.Military != null && r.State != RegimentState.Retreating && r.Manpower > 0.5 &&
-        (!r.IsColumn || (r.Role == ColumnRole.Hold && r.State != RegimentState.Moving));
+     private static bool IsFighter(Regiment r) =>
+     r.Military != null && r.State != RegimentState.Retreating && r.Manpower > 0.5;
 
     private void RebuildIndex()
     {
@@ -373,6 +394,7 @@ public class CombatManager : TickBehaviour
 
     private bool Hostile(Nation a, Nation b) =>
         a != null && b != null && a != b && WarManager.Instance.IsAtWar(a, b);
+
 
     private void Detect()
     {
@@ -411,7 +433,7 @@ public class CombatManager : TickBehaviour
             for (int i = 0; i < L.Count; i++)
             {
                 Regiment r = L[i];
-                if (r.IsColumn || r.Military == null || r.State == RegimentState.Fighting) continue;
+                if ((r.IsColumn && r.Role != ColumnRole.Occupy) || r.Military == null || r.State == RegimentState.Fighting) continue;
                 if (r.CheckedProvince == r.CurrentProvince) continue;
                 r.CheckedProvince = r.CurrentProvince;
                 TryOccupy(r);
@@ -426,8 +448,9 @@ public class CombatManager : TickBehaviour
             for (int j = cols.Count - 1; j >= 0; j--)
             {
                 Regiment c = cols[j];
-                if (c.Role == ColumnRole.Hold && c.State == RegimentState.Idle && c.Battle == null)
-                    mils[i].RemoveColumn(c);
+                if (c.State != RegimentState.Idle || c.Battle != null) continue;
+                if (c.Role == ColumnRole.Hold) mils[i].RemoveColumn(c);
+                else if (c.Role == ColumnRole.Occupy) AdvanceOccupier(mils[i], c);
             }
         }
     }
@@ -488,11 +511,9 @@ public class CombatManager : TickBehaviour
         double bonus = 1.0 + settings.bonusDamage.Value;
         double scale = step / Math.Max(0.05f, settings.tickInterval);   // fraction of a round
 
-        double toB = Math.Max(0.0, atkA - defB);
-        double toA = Math.Max(0.0, atkB - defA);
-        if (atkA < defB) { toB += stale; toA += stale; }
-        else toB *= bonus;
-        if (atkB > defA) toA *= bonus;
+        // ATK is reduced by the enemy DEF: effective = ATK * ATK / (ATK + DEF)
+        double toB = Effective(atkA, defB, bonus) * settings.damageScale + stale;
+        double toA = Effective(atkB, defA, bonus) * settings.damageScale + stale;
 
         toB *= mulA * scale;
         toA *= mulB * scale;
@@ -508,6 +529,13 @@ public class CombatManager : TickBehaviour
         }
 
         if (b.View != null) b.View.SetNumbers(b.ManpowerA, b.ManpowerB);
+    }
+
+    private static double Effective(double atk, double def, double bonus)
+    {
+        if (atk <= 0.0) return 0.0;
+        double eff = atk * atk / (atk + def);
+        return atk >= def ? eff * bonus : eff;     // bonus damage when ATK >= enemy DEF
     }
 
     private void ReinforceAll()
@@ -668,6 +696,9 @@ public class CombatManager : TickBehaviour
         }
         for (int i = 0; i < ending.Count; i++) EndBattle(ending[i], WarSide.None);
 
+        DropOccupiers(w.Attackers);
+        DropOccupiers(w.Defenders);
+
         // 2) armies go home
         if (!settings.returnToBorderAfterWar) return;
         ReturnToBorder(w, w.Attackers);
@@ -697,6 +728,150 @@ public class CombatManager : TickBehaviour
                 if (home == null) continue;
                 army.MoveRegiment(r, home);
             }
+        }
+    }
+
+    private void HandleDay()
+    {
+        if (_hops.Count > 0)                                   // forget columns that no longer exist
+        {
+            _staleBuf.Clear();
+            foreach (var kv in _hops) if (kv.Key.Military == null) _staleBuf.Add(kv.Key);
+            for (int i = 0; i < _staleBuf.Count; i++) _hops.Remove(_staleBuf[i]);
+        }
+
+        if (!settings.occupationColumns || !ArmyManager.HasInstance || !WarManager.HasInstance) return;
+        WarManager wm = WarManager.Instance;
+        if (wm.Wars.Count == 0) return;
+
+        long today = DateManager.Instance.TotalDays;
+        _dayWars.Clear();
+        _dayWars.AddRange(wm.Wars);
+        for (int i = 0; i < _dayWars.Count; i++)
+        {
+            War w = _dayWars[i];
+            if (w.Ended) continue;
+            for (int side = 0; side < 2; side++)
+            {
+                List<int> members = side == 0 ? w.Attackers : w.Defenders;
+                for (int k = 0; k < members.Count; k++)
+                {
+                    Nation n = WorldManager.Instance.GetNation(members[k]);
+                    if (n == null || n.IsEmpty) continue;
+                    if (_nextOccupier.TryGetValue(n.Id, out long due) && today < due) continue;
+                    _nextOccupier[n.Id] = today + (TrySpawnOccupier(w, n) ? settings.occupierIntervalDays : 1);
+                }
+            }
+        }
+    }
+
+    private bool TrySpawnOccupier(War w, Nation n)
+    {
+        ArmyManager army = ArmyManager.Instance;
+        Military m = army.GetMilitary(n);
+        if (m == null) return false;
+
+        int active = 0;
+        for (int i = 0; i < m.Columns.Count; i++) if (m.Columns[i].Role == ColumnRole.Occupy) active++;
+        if (active >= settings.maxOccupiersPerNation) return false;
+
+        double men = Math.Max(settings.occupierMinManpower, army.manpowerPerRegiment * settings.occupierPercent / 100.0);
+        if (m.CurrentManpower - m.TotalRegimentManpower() < men) return false;      // no spare men
+
+        Vector3 refPos = n.Capital != null ? army.ProvinceWorldPos(n.Capital) : Vector3.zero;
+        Province target = PickOccupyTarget(w, n, m, refPos, out _);
+        if (target == null) return false;
+
+        Province from = FindSafeProvince(n, army.ProvinceWorldPos(target), null);
+        if (from == null) return false;
+
+        Regiment c = m.AddColumn(from, men);
+        if (c == null) return false;
+        c.Role = ColumnRole.Occupy;
+        if (!army.MoveRegiment(c, target)) { m.RemoveColumn(c); return false; }
+        return true;
+    }
+
+    /// <summary>Nearest free enemy province next to our land or to land our side holds.</summary>
+    private Province PickOccupyTarget(War w, Nation n, Military m, Vector3 refPos, out float dist)
+    {
+        dist = float.MaxValue;
+        WarSide mine = w.SideOf(n.Id);
+        if (map == null || mine == WarSide.None) return null;
+
+        Province best = null;
+        _seenTargets.Clear();
+        for (int i = 0; i < n.Provinces.Count; i++) ScanOrigin(n.Provinces[i], w, mine, n, m, refPos, ref best, ref dist);
+        foreach (var kv in w.Occupied)
+        {
+            if (w.SideOf(kv.Value) != mine) continue;
+            Province held = map.GetProvince(kv.Key);
+            if (held != null) ScanOrigin(held, w, mine, n, m, refPos, ref best, ref dist);
+        }
+        return best;
+    }
+
+    private void ScanOrigin(Province origin, War w, WarSide mine, Nation n, Military m, Vector3 refPos, ref Province best, ref float bestD)
+    {
+        int[] nb = origin.Neighbors;
+        for (int i = 0; i < nb.Length; i++)
+        {
+            Province q = map.GetProvince(nb[i]);
+            if (q == null || q.Owner == null || !_seenTargets.Add(q.Id)) continue;
+            if (w.SideOf(q.Owner.Id) != War.Opposite(mine)) continue;     // only enemy land
+            if (w.Occupied.ContainsKey(q.Id)) continue;                   // already claimed
+            if (IsTargeted(m, q) || !CanTakeProvince(w, n, q)) continue;  // another column is going / defenders stand there
+            float d = (ArmyManager.Instance.ProvinceWorldPos(q) - refPos).sqrMagnitude;
+            if (d < bestD) { bestD = d; best = q; }
+        }
+    }
+
+    private static bool IsTargeted(Military m, Province q)
+    {
+        for (int i = 0; i < m.Columns.Count; i++)
+        {
+            Regiment c = m.Columns[i];
+            if (c.Role == ColumnRole.Occupy && c.HasPath && c.Destination == q) return true;
+        }
+        return false;
+    }
+
+    /// <summary>An idle occupation column claims where it stands, then walks to the next free province or goes home.</summary>
+    private void AdvanceOccupier(Military m, Regiment c)
+    {
+        Nation n = m.Nation;
+        if (!WarManager.Instance.IsAtWar(n)) { _hops.Remove(c); m.RemoveColumn(c); return; }
+
+        TryOccupy(c);
+        if (c.Military == null || c.State != RegimentState.Idle || c.Battle != null) return;
+
+        IReadOnlyList<War> wars = WarManager.Instance.GetWars(n);
+        _hops.TryGetValue(c, out int hops);
+        Province next = null;
+        float bestD = float.MaxValue;
+        if (hops < settings.occupierMaxHops)
+            for (int i = 0; i < wars.Count; i++)
+            {
+                Province t = PickOccupyTarget(wars[i], n, m, c.WorldPosition, out float d);
+                if (t != null && d < bestD) { bestD = d; next = t; }
+            }
+
+        if (next != null && ArmyManager.Instance.MoveRegiment(c, next)) { _hops[c] = hops + 1; return; }
+
+        _hops.Remove(c);
+        m.RemoveColumn(c);                                   // its men return to the reserve
+    }
+
+    private void DropOccupiers(List<int> members)
+    {
+        ArmyManager army = ArmyManager.Instance;
+        for (int k = 0; k < members.Count; k++)
+        {
+            Nation n = WorldManager.Instance.GetNation(members[k]);
+            Military m = n != null ? army.GetMilitary(n) : null;
+            if (m == null || WarManager.Instance.IsAtWar(n)) continue;      // still fighting elsewhere
+            for (int j = m.Columns.Count - 1; j >= 0; j--)
+                if (m.Columns[j].Role == ColumnRole.Occupy) { _hops.Remove(m.Columns[j]); m.RemoveColumn(m.Columns[j]); }
         }
     }
 
@@ -748,7 +923,7 @@ public class CombatManager : TickBehaviour
     private void HandleArrived(Regiment r)
     {
         if (r.Military == null || !r.IsColumn) return;
-        if (r.Role == ColumnRole.Hold) return;                        // waits (Idle): joins the battle on the next detect
+        if (r.Role == ColumnRole.Hold || r.Role == ColumnRole.Occupy) return;
 
         Military m = r.Military;
         Regiment t = r.MergeTarget;
@@ -824,8 +999,10 @@ public class CombatManager : TickBehaviour
     /// <summary>The regiment occupies the province it stands in (enemy land) or liberates it (own side's land held by the enemy).</summary>
     internal bool TryOccupy(Regiment r)
     {
-        if (r == null || r.Military == null || r.IsColumn) return false;
+        if (r == null || r.Military == null) return false;
+        if (r.IsColumn && r.Role != ColumnRole.Occupy) return false;   // merge / hold columns never occupy
         if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) return false;
+
         Province p = r.CurrentProvince ?? r.Province;
         if (p == null || p.Owner == null) return false;
 

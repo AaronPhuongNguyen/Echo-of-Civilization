@@ -11,6 +11,18 @@ using UnityEngine;
 public enum TileType : byte { Water = 0, Land = 1 }
 
 [Serializable]
+public class MergeSettings
+{
+    [Min(2)] public int maxProvincesPerMerge = 8;
+    [Tooltip("Treasury price per ABSORBED province (0 = free).")]
+    [Min(0f)] public float costPerAbsorbedProvince = 0f;
+    [Tooltip("ON: Defend is summed (total defence kept). OFF: tile-weighted average.")]
+    public bool sumDefend = true;
+    [Tooltip("Refuse to merge provinces that are occupied in a war or have a battle.")]
+    public bool blockWhileOccupied = true;
+}
+
+[Serializable]
 public class MapSettings
 {
     [Header("Size (500 - 2048 recommended)")]
@@ -110,6 +122,13 @@ public class MapManager : MonoBehaviour
 
     public event Action OnMapGenerated;
     public event Action<Province, int, int> OnProvinceOwnerChanged;   // province, oldNationId, newNationId
+
+    [Header("Province merging")]
+    public MergeSettings merge = new MergeSettings();
+    public string LastMergeError { get; private set; }
+
+    /// <summary>origin (the leader: its name is kept by default), absorbed provinces.</summary>
+    public event Action<Province, IReadOnlyList<Province>> OnProvincesMerged;
 
     public bool IsGenerating { get; private set; }
     public bool IsReady { get; private set; }
@@ -1467,5 +1486,242 @@ public class MapManager : MonoBehaviour
         if (c.color) Destroy(c.color);
         if (c.border) Destroy(c.border);
         if (c.go) Destroy(c.go);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  MERGE PROVINCES
+    // ─────────────────────────────────────────────────────────────────────
+
+    public bool CanMerge(Province origin, IList<Province> group, out string error)
+    {
+        return Validate(origin, group, new List<Province>(), out error);
+    }
+
+    public float GetMergeCost(IList<Province> group, Province origin)
+    {
+        int absorbed = 0;
+        if (group != null) foreach (var p in group) if (p != null && p != origin) absorbed++;
+        return absorbed * merge.costPerAbsorbedProvince;
+    }
+
+    public Province MergeProvinces(int originId, IList<int> ids, string newName = null)
+    {
+        var list = new List<Province>();
+        if (ids != null) foreach (int id in ids) list.Add(GetProvince(id));
+        return MergeProvinces(GetProvince(originId), list, newName);
+    }
+
+    /// <summary>
+    /// Merges 'group' (neighbouring provinces of ONE nation) into 'origin'. The origin's id and name survive.
+    /// newName null / empty = keep the origin's name. Returns the merged province, or null (see LastMergeError).
+    /// </summary>
+    public Province MergeProvinces(Province origin, IList<Province> group, string newName = null)
+    {
+        var all = new List<Province>();
+        if (!Validate(origin, group, all, out string err)) { LastMergeError = err; return null; }
+
+        Nation owner = origin.Owner;
+        float cost = (all.Count - 1) * merge.costPerAbsorbedProvince;
+        if (cost > 0f && !owner.TrySpend(cost)) { LastMergeError = "Not enough treasury."; return null; }
+        LastMergeError = null;
+
+        bool hadCapital = owner.Capital != null && all.Contains(owner.Capital);
+
+        // ── combine everything BEFORE touching the origin ──
+        int totalTiles = 0;
+        double sx = 0, sy = 0, pop = 0, taxPop = 0, eco = 0, defSum = 0, defTile = 0, pg = 0, infra = 0, prod = 0, dev = 0;
+        foreach (Province p in all)
+        {
+            int c = p.TileCount;
+            totalTiles += c;
+            sx += p.Centroid.x * c; sy += p.Centroid.y * c;
+            pop += p.Population;
+            taxPop += p.Tax.Base * p.Population;
+            eco += p.Economy.Base;
+            defSum += p.Defend.Base; defTile += p.Defend.Base * c;
+            pg += p.PopGrowth.Base;
+            infra += p.Infrastructure.Base * c;
+            prod += p.ProductionIncome.Base * c;
+            dev += p.Devastation * p.Population;
+        }
+
+        // ── tiles, bounds, centroid ──
+        var tiles = new int[totalTiles];
+        int k = 0;
+        var group2 = new HashSet<int>();
+        foreach (Province p in all)
+        {
+            group2.Add(p.Id);
+            Array.Copy(p.Tiles, 0, tiles, k, p.Tiles.Length);
+            k += p.Tiles.Length;
+            if (p != origin)
+            {
+                for (int i = 0; i < p.Tiles.Length; i++) _tileProvince[p.Tiles[i]] = origin.Id;
+                if (p.Min.x < origin.Min.x) origin.Min.x = p.Min.x;
+                if (p.Min.y < origin.Min.y) origin.Min.y = p.Min.y;
+                if (p.Max.x > origin.Max.x) origin.Max.x = p.Max.x;
+                if (p.Max.y > origin.Max.y) origin.Max.y = p.Max.y;
+            }
+        }
+        origin.Tiles = tiles;
+        origin.Centroid = new Vector2((float)(sx / totalTiles), (float)(sy / totalTiles));
+
+        // ── stats ──
+        origin.Population = (float)pop;
+        origin.Tax.Base = pop > 0 ? (float)(taxPop / pop) : origin.Tax.Base;
+        origin.Economy.Base = (float)eco;
+        origin.Defend.Base = merge.sumDefend ? (float)defSum : (float)(defTile / totalTiles);
+        origin.PopGrowth.Base = (float)pg;
+        origin.Infrastructure.Base = (float)(infra / totalTiles);
+        origin.ProductionIncome.Base = (float)(prod / totalTiles);
+        origin.Devastation = pop > 0 ? (float)(dev / pop) : 0f;
+
+        // ── neighbours: union of the group's outside neighbours; outsiders now point to the origin ──
+        var outside = new HashSet<int>();
+        foreach (Province p in all)
+            foreach (int id in p.Neighbors) if (!group2.Contains(id)) outside.Add(id);
+        var nb = new int[outside.Count];
+        outside.CopyTo(nb);
+        origin.Neighbors = nb;
+        foreach (int id in outside)
+        {
+            Province q = _provinces[id];
+            var l = new List<int>(q.Neighbors.Length);
+            bool added = false;
+            foreach (int m in q.Neighbors)
+            {
+                if (group2.Contains(m)) { if (!added) { l.Add(origin.Id); added = true; } }
+                else l.Add(m);
+            }
+            q.Neighbors = l.ToArray();
+        }
+
+        // ── retire the absorbed provinces ──
+        var absorbed = new List<Province>(all.Count - 1);
+        foreach (Province p in all)
+        {
+            if (p == origin) continue;
+            absorbed.Add(p);
+            _world.DetachProvince(p);
+            p.IsMerged = true;
+            p.MergedInto = origin.Id;
+            p.Tiles = Array.Empty<int>();
+            p.Neighbors = Array.Empty<int>();
+        }
+        owner.MarkDirty();
+
+        if (!string.IsNullOrWhiteSpace(newName)) origin.Name = newName.Trim();
+        if (hadCapital) _world.SetCapital(owner, origin);
+
+        // ── visuals ──
+        UpdateProvinceColor(origin);
+        RefreshProvinceVisuals(origin);       // the borders between the merged provinces disappear
+        RefreshCapitalMarkers();
+
+        OnProvincesMerged?.Invoke(origin, absorbed);
+        return origin;
+    }
+
+    private bool Validate(Province origin, IList<Province> group, List<Province> all, out string error)
+    {
+        error = null;
+        all.Clear();
+        if (!IsReady) { error = "Map is not ready."; return false; }
+        if (origin == null || origin.IsMerged || origin.Owner == null) { error = "Bad origin province."; return false; }
+
+        all.Add(origin);
+        if (group != null)
+            for (int i = 0; i < group.Count; i++)
+            {
+                Province p = group[i];
+                if (p == null || p.IsMerged) { error = "Bad province in the group."; return false; }
+                if (!all.Contains(p)) all.Add(p);
+            }
+
+        if (all.Count < 2) { error = "Need at least two provinces."; return false; }
+        if (all.Count > merge.maxProvincesPerMerge) { error = "Too many provinces (max " + merge.maxProvincesPerMerge + ")."; return false; }
+
+        Nation owner = origin.Owner;
+        foreach (Province p in all)
+            if (p.Owner != owner) { error = "All provinces must belong to the same nation."; return false; }
+
+        // connected group (BFS from the origin, inside the group only)
+        var ids = new HashSet<int>();
+        foreach (Province p in all) ids.Add(p.Id);
+        var seen = new HashSet<int> { origin.Id };
+        var q = new Queue<int>();
+        q.Enqueue(origin.Id);
+        while (q.Count > 0)
+        {
+            int c = q.Dequeue();
+            foreach (int n in _provinces[c].Neighbors)
+                if (ids.Contains(n) && seen.Add(n)) q.Enqueue(n);
+        }
+        if (seen.Count != all.Count) { error = "The provinces must touch each other."; return false; }
+
+        if (merge.blockWhileOccupied)
+        {
+            foreach (Province p in all)
+            {
+                if (CombatManager.HasInstance && CombatManager.Instance.GetBattle(p) != null) { error = p.Name + " has a battle."; return false; }
+                if (WarManager.HasInstance)
+                {
+                    var wars = WarManager.Instance.Wars;
+                    for (int w = 0; w < wars.Count; w++)
+                        if (wars[w].Occupied.ContainsKey(p.Id)) { error = p.Name + " is occupied."; return false; }
+                }
+            }
+        }
+
+        float cost = (all.Count - 1) * merge.costPerAbsorbedProvince;
+        if (cost > 0f && owner.Treasury - cost < owner.MinTreasury) { error = "Not enough treasury."; return false; }
+        return true;
+    }
+
+    /// <summary>Grows a group around 'origin' (same owner, touching, smallest neighbours first). result[0] = origin.</summary>
+    public bool FindMergeGroup(Province origin, int count, List<Province> result)
+    {
+        result.Clear();
+        if (origin == null || origin.IsMerged || origin.Owner == null) return false;
+        count = Mathf.Clamp(count, 2, Mathf.Max(2, merge.maxProvincesPerMerge));
+        result.Add(origin);
+        while (result.Count < count)
+        {
+            Province best = null;
+            for (int i = 0; i < result.Count; i++)
+                foreach (int id in result[i].Neighbors)
+                {
+                    Province q = GetProvince(id);
+                    if (q == null || q.IsMerged || q.Owner != origin.Owner || result.Contains(q)) continue;
+                    if (best == null || q.TileCount < best.TileCount) best = q;
+                }
+            if (best == null) break;
+            result.Add(best);
+        }
+        return result.Count >= 2;
+    }
+
+    /// <summary>A fresh, unused province name (for "merge into a new name").</summary>
+    public string GenerateProvinceName()
+    {
+        var used = new HashSet<string>();
+        foreach (Province p in _provinces) if (!p.IsMerged) used.Add(p.Name);
+        var rng = new Unity.Mathematics.Random(HashSeed((uint)RNG.GetInt(1, int.MaxValue)));
+        return NameManager.ProvinceName(ref rng, used);
+    }
+
+    [ContextMenu("Merge: random province + 2 neighbours (origin name)")]
+    private void MenuMerge()
+    {
+        if (!IsReady || _provinces.Count == 0) return;
+        var list = new List<Province>();
+        for (int t = 0; t < 32; t++)
+        {
+            Province p = _provinces[RNG.GetInt(0, _provinces.Count)];
+            if (!FindMergeGroup(p, 3, list)) continue;
+            Province r = MergeProvinces(p, list);
+            Debug.Log(r != null ? "[Map] Merged into " + r.Name + " (" + r.TileCount + " tiles)." : "[Map] Merge failed: " + LastMergeError);
+            return;
+        }
     }
 }

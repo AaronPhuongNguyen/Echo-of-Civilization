@@ -12,7 +12,7 @@ public enum RegimentState : byte
 }
 
 /// <summary>Merge = reinforcement column walking to its regiment. Hold = rear guard that fights at the battle site.</summary>
-public enum ColumnRole : byte { None = 0, Merge = 1, Hold = 2 }
+public enum ColumnRole { None ,Merge, Hold, Occupy }   // keep your existing order/values, just add Occupy
 
 /// <summary>
 /// One regiment of a nation's Military. PURE LOGIC at a WORLD position of the real map (no GameObject).
@@ -76,6 +76,16 @@ public sealed class Regiment
         State = RegimentState.Idle;
     }
 
+    /// <summary>A province was merged away: every reference to it now points to the origin.</summary>
+    internal void RemapProvince(Province from, Province to)
+    {
+        if (Province == from) Province = to;
+        if (CurrentProvince == from) CurrentProvince = to;
+        if (TargetProvince == from) TargetProvince = to;
+        if (CheckedProvince == from) CheckedProvince = to;
+        if (_path != null)
+            for (int i = 0; i < _path.Count; i++) if (_path[i] == from) _path[i] = to;
+    }
     internal void Clear()
     {
         Military = null;

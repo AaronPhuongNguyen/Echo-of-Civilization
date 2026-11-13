@@ -462,6 +462,7 @@ public class ArmyManager : TickBehaviour
         WorldManager.Instance.OnNationsCleared += ClearAll;
         WorldManager.Instance.OnNationRemoved += HandleNationRemoved;
         DateManager.Instance.OnDayPassed += HandleDay;
+        map.OnProvincesMerged += HandleProvincesMerged;
 
         if (map != null)
         {
@@ -478,6 +479,7 @@ public class ArmyManager : TickBehaviour
         {
             WorldManager.Instance.OnNationsCleared -= ClearAll;
             WorldManager.Instance.OnNationRemoved -= HandleNationRemoved;
+            if (_subscribedMap != null) _subscribedMap.OnProvincesMerged -= HandleProvincesMerged;
         }
         if (DateManager.HasInstance) DateManager.Instance.OnDayPassed -= HandleDay;
         if (_subscribedMap != null) _subscribedMap.OnMapGenerated -= BuildAll;
@@ -542,6 +544,21 @@ public class ArmyManager : TickBehaviour
         return m;
     }
 
+    private void HandleProvincesMerged(Province origin, IReadOnlyList<Province> absorbed)
+    {
+        for (int i = 0; i < _list.Count; i++)
+        {
+            Military m = _list[i];
+            for (int pass = 0; pass < 2; pass++)
+            {
+                List<Regiment> regs = pass == 0 ? m.Regiments : m.Columns;
+                for (int j = 0; j < regs.Count; j++)
+                    for (int a = 0; a < absorbed.Count; a++) regs[j].RemapProvince(absorbed[a], origin);
+            }
+            RefreshStacks(m);
+        }
+    }
+
     internal void MarkPreparationDirty() => _prepDirty = true;
     internal void RaiseCreated(Regiment r)
     {
@@ -572,8 +589,12 @@ public class ArmyManager : TickBehaviour
         if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) return false;
 
         Province from = r.CurrentProvince ?? r.Province;
-        if (!FindPath(from, dest, _pathBuf)) return false;
-        if (_pathBuf.Count == 0) _pathBuf.Add(dest);          // already inside: walk to its center
+        Nation mover = r.Military.Nation;
+        // if the regiment already stands in forbidden land (e.g. after a war ended), do not restrict it
+        Nation restrictTo = CanEnter(mover, from) ? mover : null;
+
+        if (!FindPath(from, dest, _pathBuf, restrictTo)) return false;
+        if (_pathBuf.Count == 0) _pathBuf.Add(dest);
 
         r.BeginMove(_pathBuf, ProvinceWorldPos(_pathBuf[0]));
         TrackMoving(r);
@@ -581,12 +602,27 @@ public class ArmyManager : TickBehaviour
         return true;
     }
 
+    /// <summary>Own land, unowned land, or land of a nation that is in one of our wars (enemy OR ally of the war).</summary>
+    internal bool CanEnter(Nation mover, Province p)
+    {
+        if (mover == null || p == null) return true;
+        Nation owner = p.Owner;
+        if (owner == null || owner == mover) return true;
+        if (!WarManager.HasInstance) return true;
+
+        IReadOnlyList<War> wars = WarManager.Instance.GetWars(mover);
+        for (int i = 0; i < wars.Count; i++)
+            if (wars[i].SideOf(owner.Id) != WarSide.None) return true;
+        return false;
+    }
+
     /// <summary>BFS over the province borders. 'result' = provinces to visit (without the start). Empty = same province.</summary>
-    internal bool FindPath(Province from, Province to, List<Province> result)
+    internal bool FindPath(Province from, Province to, List<Province> result, Nation restrictTo = null)
     {
         result.Clear();
         if (map == null || from == null || to == null) return false;
         if (from == to) return true;
+        if (restrictTo != null && !CanEnter(restrictTo, to)) return false;
 
         IReadOnlyList<Province> all = map.Provinces;
         int count = all.Count;
@@ -608,6 +644,7 @@ public class ArmyManager : TickBehaviour
             {
                 int m = nb[i];
                 if (_bfsStamp[m] == _stamp) continue;
+                if (restrictTo != null && !CanEnter(restrictTo, all[m])) continue;   // neutral nation: blocked
                 _bfsStamp[m] = _stamp;
                 _bfsPrev[m] = c;
                 _bfsQ.Enqueue(m);

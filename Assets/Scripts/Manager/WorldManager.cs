@@ -62,6 +62,10 @@ public class Province : IDirtyable
     /// <summary>0..1. Reduces the province income (1 = income is zero).</summary>
     public float Devastation { get => _devastation; set { _devastation = Mathf.Clamp01(value); MarkDirty(); } }
 
+    /// <summary>True when this province was merged into another one (dead stub, ignore it).</summary>
+    public bool IsMerged { get; internal set; }
+    public int MergedInto = -1;
+
     public Province()
     {
         Tax.Bind(this); Economy.Bind(this); Defend.Bind(this);
@@ -440,6 +444,17 @@ public class WorldManager : TickBehaviour
 
         OnIncreaseQueued?.Invoke(p, stat);
         return true;
+    }
+
+    /// <summary>Removes a province from its owner (queued increases refunded). Used by province merging.</summary>
+    internal void DetachProvince(Province p)
+    {
+        if (p == null) return;
+        if (p.HasUpgrades) CancelAllIncreases(p, true);
+        Nation old = p.Owner;
+        if (old != null) { old.Provinces.Remove(p); old.MarkDirty(); }
+        p.Owner = null;
+        p.OwnerNationId = -1;
     }
 
     public bool TryQueueIncrease(Province p, StatType stat) => TryQueueIncrease(p, stat, out _);

@@ -296,6 +296,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   settings:
+    decisionProgress: 85
     declareRelationThreshold: -10
     makeEnemyOnDeclare: 1
     callAllies: 1
@@ -305,9 +306,13 @@ MonoBehaviour:
     armyDestroyedPercent: 30
     allProvincesPercent: 50
     monthlyLeadPercent: 5
+    provinceScoreCost: 8
+    capitalScoreCost: 20
+    occupiedCostFactor: 0.5
     spreadProvinces: 0
     truceDays: 360
     relationAfterPeace: -5
+    idleYearsWhitePeace: 5
     autoOccupyByRegiments: 1
   map: {fileID: 1905439404}
   debugNationA: -1
@@ -339,11 +344,12 @@ MonoBehaviour:
       Percent: 0
       Total: 1
     bonusDamage:
-      Base: 0.5
+      Base: 0.15
       Flat: 0
       Percent: 0
       Total: 1
     hpLostPerManpower: 5
+    damageScale: 0.1
     reinforcements: 1
     reinforceInterval: 3
     reinforceBelowPercent: 99
@@ -352,6 +358,13 @@ MonoBehaviour:
     maxColumnsPerRegiment: 3
     holdSplit: 0.25
     mergeRadiusTiles: 3
+    maxNewColumnsPerScan: 12
+    occupationColumns: 1
+    occupierIntervalDays: 7
+    occupierPercent: 5
+    occupierMinManpower: 100
+    maxOccupiersPerNation: 3
+    occupierMaxHops: 4
     returnToBorderAfterWar: 1
   map: {fileID: 0}
   attackLogo: {fileID: 21300000, guid: 3b4eb09f95a8470448b72eae0dc370ab, type: 3}
@@ -598,7 +611,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   startGameSpeed: 1
-  startPaused: 1
+  startPaused: 0
   maxGameSpeed: 5
   maxFrameTime: 0.1
   simTickRate: 10
@@ -963,6 +976,9 @@ MonoBehaviour:
     diplomacyIntervalDays: 15
     militaryInterval: 1.5
     nationsPerTick: 4
+    counterAttackAfterDays: 14
+    demandSpend: 1
+    maxDemandProvinces: 40
     aggressionRange: {x: 0.1, y: 0.9}
     friendlinessRange: {x: 0.2, y: 0.9}
     peaceReserve: 0.15
@@ -997,7 +1013,7 @@ MonoBehaviour:
     improveUntil: 45
     winProgress: 100
     stalemateDays: 1080
-    allowVassalize: 0
+    allowVassalize: 1
   map: {fileID: 0}
 --- !u!1 &1011075990
 GameObject:
@@ -1374,7 +1390,7 @@ MonoBehaviour:
       Percent: 0
       Total: 1
     minNations: 2
-    maxNations: 24
+    maxNations: 2
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
     waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}
@@ -1573,7 +1589,9 @@ MonoBehaviour:
   defaultPreparationLevel: 1
   prepStepInterval: 0.5
   prepStepPercent: 1
-  defaultRegiments: 20
+  manpowerPerRegiment: 10000
+  minRegiments: 1
+  maxRegiments: 30
   retreatManpowerPercent: 10
   MinManpowerToRetreat: 10000
   reinforcePerDay: 0.02
