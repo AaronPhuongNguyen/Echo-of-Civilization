@@ -70,7 +70,7 @@ public class MapSettings
     [Range(0f, 1f)] public float minIslandNationFactor = 0.4f;
 
     [Header("Rendering")]
-    public Color waterColor = new Color(0.12f, 0.32f, 0.58f); // Màu xanh biển sâu thẳm, dịu mắt hơn
+    public Color waterColor = new Color(0.12f, 0.32f, 0.58f); 
     public Color neutralColor = new Color(0.6f, 0.6f, 0.6f);
     public Color borderColor = Color.black;
     [Range(0f, 1f)] public float provinceBorderAlpha = 0.35f;

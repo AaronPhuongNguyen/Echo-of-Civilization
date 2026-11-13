@@ -568,7 +568,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   upgrades:
-    basePrice: 10
+    basePrice: 50
     inflation: 5
     daysPerIncrease: 90
     maxQueue: 100
@@ -654,13 +654,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   settings:
-    width: 316
-    height: 316
+    width: 516
+    height: 516
     tileSize: 1
     pivotAtCenter: 1
     randomSeed: 0
-    seed: 54321
-    landPercent: 0.45
+    seed: 76375923
+    landPercent: 0.6
     minContinents: 7
     maxContinents: 9
     continentRadius: 0.2
@@ -706,11 +706,11 @@ MonoBehaviour:
       Flat: 0
       Percent: 0
       Total: 1
-    minNations: 5
-    maxNations: 250
+    minNations: 10
+    maxNations: 500
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
-    waterColor: {r: 0.12, g: 0.32, b: 0.58, a: 1}
+    waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}
     neutralColor: {r: 0.6, g: 0.6, b: 0.6, a: 1}
     borderColor: {r: 0, g: 0, b: 0, a: 1}
     provinceBorderAlpha: 0.35
@@ -726,7 +726,7 @@ MonoBehaviour:
     generateOnBackgroundThread: 1
   generateOnStart: 1
   viewCamera: {fileID: 0}
-  capitalMarkerPrefab: {fileID: 0}
+  capitalMarkerPrefab: {fileID: 7419103687079356653, guid: ab5ab515898ce6048ac681ac18223750, type: 3}
   markerProvinceFraction: 0.6
   markerMinTiles: 3
   markerSortingOrder: 10
@@ -740,9 +740,9 @@ GameObject:
   m_Component:
   - component: {fileID: 1939603376}
   - component: {fileID: 1939603377}
-  - component: {fileID: 1939603378}
   - component: {fileID: 1939603380}
   - component: {fileID: 1939603379}
+  - component: {fileID: 1939603381}
   m_Layer: 0
   m_Name: Controller
   m_TagString: Untagged
@@ -788,25 +788,6 @@ MonoBehaviour:
   simulateTouchWithMouse: 1
   longPressSeconds: 0.5
   longPressMoveTolerance: 15
---- !u!114 &1939603378
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1939603375}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 91e8b4277866b1b46977f788d94cec2f, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  speedSteps:
-  - 0.5
-  - 1
-  - 2
-  - 3
-  - 5
-  state: 
 --- !u!114 &1939603379
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -851,6 +832,25 @@ MonoBehaviour:
   map: {fileID: 0}
   selectOnTap: 0
   logSelection: 1
+--- !u!114 &1939603381
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1939603375}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 91e8b4277866b1b46977f788d94cec2f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  speedSteps:
+  - 0.5
+  - 1
+  - 2
+  - 3
+  - 5
+  state: 
 --- !u!1 &2035398686
 GameObject:
   m_ObjectHideFlags: 0

@@ -6,7 +6,7 @@ using UnityEngine;
 /// Contains NO input code: it subscribes to EventBus.OnTogglePause / OnSpeedUp / OnSpeedDown
 /// (raised by GameController hotkeys or by UI buttons). The public methods can also be wired to UI onClick.
 /// </summary>
-public class TimeController : MonoBehaviour
+public class TickController : MonoBehaviour
 {
     [Header("Speed steps (ascending, limited by TickManager max speed)")]
     [SerializeField] private float[] speedSteps = { 0.5f, 1f, 2f, 3f, 5f };
