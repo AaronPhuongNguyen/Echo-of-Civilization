@@ -114,6 +114,8 @@ public class AIManager : TickBehaviour
 
     protected override int TickPriority => -600;
 
+    public void RefreshNations() => RefreshMarks();
+
     // ── per nation state ──
     private sealed class AIState
     {
@@ -1076,6 +1078,7 @@ public class AIManager : TickBehaviour
         RelationshipManager rel = Rel;
         WarManager wm = WM;
         bool atWar = wm.IsAtWar(n);
+        if (!atWar) NationFormationManager.Instance.AIThink(n, st.Aggression, today);
         double myPower = CoalitionPower(n, false);
 
         _nbSet.Clear();

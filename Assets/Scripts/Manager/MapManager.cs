@@ -1125,10 +1125,24 @@ public class MapManager : MonoBehaviour
         RefreshCapitalMarkers();
     }
 
-    private void RefreshCapitalMarkers()
+    public void RefreshCapitalMarkers()
     {
         if (_markerRoot == null || !capitalMarkerPrefab) return;
         var pool = PoolManager.Instance;
+
+        List<int> stale = null;
+        foreach (var kv in _markers)
+            if (_world.GetNation(kv.Key) == null)
+            {
+                if (stale == null) stale = new List<int>();
+                stale.Add(kv.Key);
+            }
+        if (stale != null)
+            for (int i = 0; i < stale.Count; i++)
+            {
+                if (_markers[stale[i]] != null) pool.Despawn(_markers[stale[i]]);
+                _markers.Remove(stale[i]);
+            }
 
         foreach (Nation n in _world.Nations)
         {

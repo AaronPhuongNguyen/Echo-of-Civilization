@@ -87,8 +87,8 @@ public class WarSettings
     [Range(0f, 100f)] public float monthlyLeadPercent = 5f;
 
     [Header("Occupation spread")]
-    [Tooltip("When a province becomes occupied, this many NEIGHBOURING enemy provinces (random, free of enemy fighters) are occupied with it. 0 = off.")]
-    [Min(0)] public int spreadProvinces = 1;
+    [Tooltip("When a province becomes occupied, this many NEIGHBOURING enemy provinces (random, free of enemy fighters) are occupied with it. 0 = All of surrounding provinces.")]
+    [Min(0)] public int spreadProvinces = 0;
 
     [Header("After the war")]
     [Tooltip("Days nobody on the two sides may declare war on each other again.")]
@@ -713,7 +713,7 @@ public class WarManager : TickBehaviour
     private void SpreadOccupation(War war, Nation occupier, Province origin, WarSide mine)
     {
         int count = settings.spreadProvinces;
-        if (count <= 0 || _map == null || origin.Neighbors == null) return;
+        if (count < 0 || _map == null || origin.Neighbors == null) return;   // -1 = off
 
         _spreadBuf.Clear();
         int[] nb = origin.Neighbors;
@@ -728,7 +728,8 @@ public class WarManager : TickBehaviour
             _spreadBuf.Add(q);
         }
 
-        for (int n = 0; n < count && _spreadBuf.Count > 0 && !war.Ended; n++)
+        int take = count == 0 ? _spreadBuf.Count : count;                           // 0 = all neighbours
+        for (int n = 0; n < take && _spreadBuf.Count > 0 && !war.Ended; n++)
         {
             int idx = RNG.GetInt(0, _spreadBuf.Count);
             Province pick = _spreadBuf[idx];
