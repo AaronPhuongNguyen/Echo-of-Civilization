@@ -349,7 +349,7 @@ MonoBehaviour:
       Percent: 0
       Total: 1
     hpLostPerManpower: 5
-    damageScale: 0.1
+    damageScale: 0.05
     reinforcements: 1
     reinforceInterval: 3
     reinforceBelowPercent: 99
@@ -978,12 +978,12 @@ MonoBehaviour:
     nationsPerTick: 4
     counterAttackAfterDays: 14
     demandSpend: 1
-    maxDemandProvinces: 40
+    maxDemandProvinces: 60
     aggressionRange: {x: 0.1, y: 0.9}
     friendlinessRange: {x: 0.2, y: 0.9}
     peaceReserve: 0.15
     warReserve: 0.05
-    maxIncreasesPerRound: 3
+    maxIncreasesPerRound: 4
     sampleProvinces: 8
     maxQueuePerProvince: 2
     mustPopGrowthBelow: 0.5
@@ -1004,7 +1004,7 @@ MonoBehaviour:
     massReadyFraction: 0.75
     massTimeout: 40
     manageShares: 1
-    shareInterval: 8
+    shareInterval: 6
     warMinPowerRatio: 1.6
     fearRatio: 1.2
     warChancePerCheck: 0.3
@@ -1014,6 +1014,13 @@ MonoBehaviour:
     winProgress: 100
     stalemateDays: 1080
     allowVassalize: 1
+    mergeProvinces: 1
+    mergeIntervalDays: 90
+    mergeMinProvinces: 8
+    mergeSmallFactor: 0.6
+    mergeGroupSize: 8
+    mergeNewNameChance: 0.4
+    mergeOnlyInPeace: 1
   map: {fileID: 0}
 --- !u!1 &1011075990
 GameObject:
@@ -1409,6 +1416,11 @@ MonoBehaviour:
     generateOnBackgroundThread: 1
   generateOnStart: 1
   viewCamera: {fileID: 0}
+  merge:
+    maxProvincesPerMerge: 8
+    costPerAbsorbedProvince: 0
+    sumDefend: 1
+    blockWhileOccupied: 1
   capitalMarkerPrefab: {fileID: 7419103687079356653, guid: ab5ab515898ce6048ac681ac18223750, type: 3}
   markerProvinceFraction: 0.6
   markerMinTiles: 3

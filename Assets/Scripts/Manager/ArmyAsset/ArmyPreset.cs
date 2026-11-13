@@ -47,6 +47,7 @@ public sealed class Regiment
     public double LostHp { get; internal set; }
     public double TotalHp => Military != null ? Manpower * Military.HpPerMan.Value : 0.0;
 
+
     // ── reinforcement column ──
     public bool IsColumn { get; internal set; }
     public ColumnRole Role { get; internal set; }
@@ -76,6 +77,16 @@ public sealed class Regiment
         State = RegimentState.Idle;
     }
 
+    /// <summary>Set by the AI while the regiment holds a tactical position (siege ring). Auto-support ignores it.</summary>
+    internal bool TacticLock;
+
+    internal void CopyPath(List<Province> dst)
+    {
+        dst.Clear();
+        if (_path == null) return;
+        for (int i = _pathIndex; i < _path.Count; i++) dst.Add(_path[i]);
+    }
+
     /// <summary>A province was merged away: every reference to it now points to the origin.</summary>
     internal void RemapProvince(Province from, Province to)
     {
@@ -88,6 +99,7 @@ public sealed class Regiment
     }
     internal void Clear()
     {
+        TacticLock = false;
         Military = null;
         Province = null;
         TargetProvince = null;

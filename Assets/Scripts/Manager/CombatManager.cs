@@ -119,7 +119,7 @@ public sealed class Battle
 //  War end  : battles of that war stop at once and the regiments walk back to the border (nearest own province).
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-650)]
-public class CombatManager : TickBehaviour
+public partial class CombatManager : TickBehaviour
 {
     // ── singleton ──
     private static CombatManager _instance;
@@ -310,6 +310,7 @@ public class CombatManager : TickBehaviour
         _index.Clear();
         _occupier.Clear();
         _nextOccupier.Clear(); _hops.Clear();
+        _sieges.Clear();
         DestroyOverlay();
     }
 
@@ -347,6 +348,8 @@ public class CombatManager : TickBehaviour
         }
 
         PaintTrails();
+
+        SiegeTick(deltaTime); SupportTick(deltaTime);
 
 #if UNITY_EDITOR
         if (showBattlesInInspector && Time.unscaledTime >= _nextInspectorRefresh)
@@ -685,6 +688,8 @@ public class CombatManager : TickBehaviour
     {
         if (w == null || !ArmyManager.HasInstance) return;
 
+        EndSiegesOf(w);
+
         // 1) battles between the two sides of this war stop now (unless the nations still fight in another war).
         //    A private list: this can run while RunBattles / Detect are iterating their own lists.
         var ending = new List<Battle>();
@@ -983,6 +988,8 @@ public class CombatManager : TickBehaviour
     {
         if (w == null || me == null || p == null) return false;
         if (_battleAt.ContainsKey(p.Id)) return false;
+        if (SiegeBlocks(w, me, p)) return false;.
+
         WarSide mine = w.SideOf(me.Id);
         if (_index.TryGetValue(p.Id, out List<Regiment> L))
             for (int i = 0; i < L.Count; i++)

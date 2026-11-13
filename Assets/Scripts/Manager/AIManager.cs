@@ -61,6 +61,18 @@ public class AISettings
     public bool manageShares = true;
     [Min(2f)] public float shareInterval = 8f;
 
+    [Header("Tactics (flank / siege / breakout / anti-siege)")]
+    public bool useTactics = true;
+    public bool showTacticVisuals = true;
+    [Tooltip("Chance that an attacking AI tries Flank + Siege before a normal attack.")]
+    [Range(0f, 1f)] public float flankSiegePreference = 0.75f;
+    [Min(1f)] public float tacticInterval = 6f;
+    [Min(2)] public int siegeMinRegiments = 3;
+    [Min(2)] public int siegeMaxSlots = 6;
+    [Min(10f)] public float siegeTimeout = 60f;
+    [Tooltip("When the ring is mostly in place, one regiment attacks the target head-on to pin it.")]
+    public bool siegeFrontalFix = true;
+
     [Header("Diplomacy / war")]
     [Tooltip("Coalition power needed over the target before the AI plans a war.")]
     public float warMinPowerRatio = 1.6f;
@@ -101,7 +113,7 @@ public enum AIMass : byte { None = 0, Massing = 1 }
 //   DIPLOMACY : improves relations, pacts, alliances, plans and declares wars, ends decided wars.
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-600)]
-public class AIManager : TickBehaviour
+public partial class AIManager : TickBehaviour
 {
     // ── singleton ──
     private static AIManager _instance;
@@ -150,6 +162,12 @@ public class AIManager : TickBehaviour
         public float MassSince;
         public bool SharesCustom;
         public long NextMerge;
+        public float NextTactic, NextAnnounce;
+        public Province SiegeTarget;
+        public float SiegeSince;
+        public readonly List<Regiment> SiegeUnits = new List<Regiment>();
+        public bool SiegeFormed, SiegeFrontal;
+        public int BreakoutSiege = -1;
     }
 
     private struct Threat { public Province P; public double Men; public float Pri; }
@@ -783,8 +801,7 @@ public class AIManager : TickBehaviour
     //   5) Defender leftovers rally where the pressure is
     // ─────────────────────────────────────────────────────────────────────
     private void CommandWar(AIState st, Military m)
-    {
-        
+    {       
 
         Nation n = st.Nation;
         WM.GetEnemies(n, _enemies);
@@ -803,6 +820,7 @@ public class AIManager : TickBehaviour
         if (_free.Count == 0) return;
 
         bool passive = defender && !IdleAsDefender(n);       // waiting too long -> stop being passive
+        RunTactics(st, m, passive);
 
         AssignDefence(st, m, passive);
         AssignLiberation(st, m);

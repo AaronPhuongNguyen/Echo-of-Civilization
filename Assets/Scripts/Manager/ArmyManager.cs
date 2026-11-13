@@ -583,17 +583,19 @@ public class ArmyManager : TickBehaviour
     }
 
     /// <summary>Orders a regiment to march to a province along the province graph (shortest path).</summary>
-    public bool MoveRegiment(Regiment r, Province dest)
+    public bool MoveRegiment(Regiment r, Province dest) => MoveRegiment(r, dest, null);
+
+    /// <summary>'avoid' = province ids the route may not cross (the destination itself is always allowed).</summary>
+    public bool MoveRegiment(Regiment r, Province dest, HashSet<int> avoid)
     {
         if (r == null || dest == null || r.Military == null) return false;
         if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) return false;
 
         Province from = r.CurrentProvince ?? r.Province;
         Nation mover = r.Military.Nation;
-        // if the regiment already stands in forbidden land (e.g. after a war ended), do not restrict it
         Nation restrictTo = CanEnter(mover, from) ? mover : null;
 
-        if (!FindPath(from, dest, _pathBuf, restrictTo)) return false;
+        if (!FindPath(from, dest, _pathBuf, restrictTo, avoid)) return false;
         if (_pathBuf.Count == 0) _pathBuf.Add(dest);
 
         r.BeginMove(_pathBuf, ProvinceWorldPos(_pathBuf[0]));
@@ -617,12 +619,13 @@ public class ArmyManager : TickBehaviour
     }
 
     /// <summary>BFS over the province borders. 'result' = provinces to visit (without the start). Empty = same province.</summary>
-    internal bool FindPath(Province from, Province to, List<Province> result, Nation restrictTo = null)
+    internal bool FindPath(Province from, Province to, List<Province> result, Nation restrictTo = null, HashSet<int> avoid = null)
     {
         result.Clear();
         if (map == null || from == null || to == null) return false;
         if (from == to) return true;
         if (restrictTo != null && !CanEnter(restrictTo, to)) return false;
+
 
         IReadOnlyList<Province> all = map.Provinces;
         int count = all.Count;
@@ -645,6 +648,7 @@ public class ArmyManager : TickBehaviour
                 int m = nb[i];
                 if (_bfsStamp[m] == _stamp) continue;
                 if (restrictTo != null && !CanEnter(restrictTo, all[m])) continue;   // neutral nation: blocked
+                if (avoid != null && m != to.Id && avoid.Contains(m)) continue;
                 _bfsStamp[m] = _stamp;
                 _bfsPrev[m] = c;
                 _bfsQ.Enqueue(m);
