@@ -26,6 +26,11 @@ public class CombatSettings
     [Tooltip("Global multiplier of the ATK/DEF damage. Raise = faster battles, lower = slower.")]
     [Min(0.0001f)] public float damageScale = 0.01f;
 
+    [Header("Dice (daily roll)")]
+    public bool useDice = true;
+    [Tooltip("Damage multiplier of the roll winner = 1 + this * dice (1..6).")]
+    public GameValue diceDamageBonus = new GameValue(0.5f);
+
     [Header("Reinforcement")]
     public bool reinforcements = true;
     [Tooltip("Game-seconds between two reinforcement checks of a battle.")]
@@ -82,6 +87,11 @@ public sealed class Battle
     public readonly Color ColorA, ColorB;
     public readonly List<Regiment> SideA = new List<Regiment>(4);
     public readonly List<Regiment> SideB = new List<Regiment>(4);
+
+    /// <summary>0 = no roll yet, 1 = side A got the dice, 2 = side B.</summary>
+    public int DiceSide { get; internal set; }
+    public int DiceValue { get; internal set; }
+    internal long DiceDay = -1;
     public int Ticks { get; internal set; }
     public bool Ended { get; internal set; }
     internal float ReinforceTimer;
@@ -219,6 +229,7 @@ public partial class CombatManager : TickBehaviour
     public event Action<Battle> OnBattleStarted;
     /// <summary>battle, winner (Attacker = side A, Defender = side B, None = draw / peace)</summary>
     public event Action<Battle, WarSide> OnBattleEnded;
+    public event Action<Battle> OnDiceRolled;
 
     protected override int TickPriority => -650;
 
@@ -507,6 +518,9 @@ public partial class CombatManager : TickBehaviour
         }
 
         b.Ticks++;
+
+        if (settings.useDice && b.DiceDay != DateManager.Instance.TotalDays) RollDice(b);
+
         Totals(b.SideA, out double atkA, out double defA, out double mulA);
         Totals(b.SideB, out double atkB, out double defB, out double mulB);
 
@@ -520,6 +534,13 @@ public partial class CombatManager : TickBehaviour
 
         toB *= mulA * scale;
         toA *= mulB * scale;
+
+        if (settings.useDice)
+        {
+            double dm = 1.0 + settings.diceDamageBonus.Value * b.DiceValue;
+            if (b.DiceSide == 1) toB *= dm;      // A got the dice: A hits harder
+            else toA *= dm;
+        }
 
         ApplyDamage(b.SideB, toB);
         ApplyDamage(b.SideA, toA);
@@ -539,6 +560,16 @@ public partial class CombatManager : TickBehaviour
         if (atk <= 0.0) return 0.0;
         double eff = atk * atk / (atk + def);
         return atk >= def ? eff * bonus : eff;     // bonus damage when ATK >= enemy DEF
+    }
+
+    private void RollDice(Battle b)
+    {
+        b.DiceDay = DateManager.Instance.TotalDays;
+        b.DiceSide = RNG.GetInt(0, 2) == 0 ? 1 : 2;      // 50 / 50
+        b.DiceValue = RNG.GetInt(1, 7);                  // 1..6
+        OnDiceRolled?.Invoke(b);
+
+        Nation lead = b.DiceSide == 1 ? b.LeadA : b.LeadB;
     }
 
     private void ReinforceAll()
@@ -988,7 +1019,7 @@ public partial class CombatManager : TickBehaviour
     {
         if (w == null || me == null || p == null) return false;
         if (_battleAt.ContainsKey(p.Id)) return false;
-        if (SiegeBlocks(w, me, p)) return false;.
+        if (SiegeBlocks(w, me, p)) return false;
 
         WarSide mine = w.SideOf(me.Id);
         if (_index.TryGetValue(p.Id, out List<Regiment> L))
