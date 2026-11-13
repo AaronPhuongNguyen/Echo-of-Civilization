@@ -334,6 +334,21 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c8d789e7d57702547928ad6bba9d40b9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  siege:
+    enabled: 1
+    checkInterval: 1.5
+    maxPocketProvinces: 20
+    minRingRegiments: 2
+    attritionPerSecond: 0.0004
+    supportEnabled: 1
+    supportRadiusTiles: 200
+    scaleWithMapSize: 1
+    supportScanInterval: 3
+    maxSupportersPerBattle: 6
+    supportMinStrength: 0.4
+    supportWinRatio: 1.4
+    supportOwnNation: 1
+    supportPlayerArmies: 1
   settings:
     detectInterval: 0.2
     tickInterval: 1
@@ -349,7 +364,13 @@ MonoBehaviour:
       Percent: 0
       Total: 1
     hpLostPerManpower: 5
-    damageScale: 0.05
+    damageScale: 0.03
+    useDice: 1
+    diceDamageBonus:
+      Base: 0.25
+      Flat: 0
+      Percent: 0
+      Total: 1
     reinforcements: 1
     reinforceInterval: 3
     reinforceBelowPercent: 99
@@ -370,7 +391,7 @@ MonoBehaviour:
   attackLogo: {fileID: 21300000, guid: 3b4eb09f95a8470448b72eae0dc370ab, type: 3}
   defendLogo: {fileID: 21300000, guid: b7fe80fa6f21e0c419dce02e1c1da4f7, type: 3}
   backgroundSprite: {fileID: 21300000, guid: 7177f0c0913cf86468c79ba6887cd4fd, type: 3}
-  battleCardScale: 1.5
+  battleCardScale: 1.75
   trailRadiusTiles: 3
   trailAlpha: 0.6
   overlayMaxSize: 1024
@@ -1005,6 +1026,14 @@ MonoBehaviour:
     massTimeout: 40
     manageShares: 1
     shareInterval: 6
+    useTactics: 1
+    showTacticVisuals: 1
+    flankSiegePreference: 0.75
+    tacticInterval: 6
+    siegeMinRegiments: 3
+    siegeMaxSlots: 6
+    siegeTimeout: 60
+    siegeFrontalFix: 1
     warMinPowerRatio: 1.6
     fearRatio: 1.2
     warChancePerCheck: 0.3
@@ -1396,8 +1425,8 @@ MonoBehaviour:
       Flat: 0
       Percent: 0
       Total: 1
-    minNations: 2
-    maxNations: 2
+    minNations: 6
+    maxNations: 6
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
     waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}

@@ -209,10 +209,6 @@ public partial class AIManager : TickBehaviour
     private readonly HashSet<int> _mine = new HashSet<int>();
     private readonly HashSet<int> _candSet = new HashSet<int>();
     private readonly Dictionary<int, float> _cost = new Dictionary<int, float>();
-    private readonly Dictionary<int, float> _dist = new Dictionary<int, float>();
-    private readonly Dictionary<int, int> _prev = new Dictionary<int, int>();
-    private readonly HashSet<int> _done = new HashSet<int>();
-    private readonly List<Province> _open = new List<Province>();
     private readonly List<Province> _mergeBuf = new List<Province>();
 
     private WarManager WM => WarManager.Instance;
@@ -1383,7 +1379,7 @@ public partial class AIManager : TickBehaviour
         }
         if (_cand.Count == 0) return false;
 
-        // our land (and allies' land) = where new provinces attach
+        // our land (and allies' land) = the border the new provinces attach to
         foreach (int id in side == WarSide.Attacker ? w.Attackers : w.Defenders)
         {
             Nation a = World.GetNation(id);
@@ -1393,93 +1389,12 @@ public partial class AIManager : TickBehaviour
 
         float budget = WM.GetDemandBudget(w, side) * settings.demandSpend;
 
-        // 1) best potential province + the whole corridor to it; repeat while score remains
-        while (_demand.Count < settings.maxDemandProvinces && budget > 0f)
-        {
-            if (!PlanCorridor(w, side, budget, out float spent)) break;
-            budget -= spent;
-        }
-
-        // 2) nothing valid -> just take what is nearest to the border
-        if (_demand.Count == 0) FillNearBorder(w, side, budget);
-
-        if (_demand.Count == 0) return false;
-        return WM.Decide(w, side, _demand);
-    }
-
-    /// <summary>Finds the most desirable province whose cheapest corridor from our land is affordable, and adds the corridor to the demand.</summary>
-    private bool PlanCorridor(War w, WarSide side, float budget, out float spent)
-    {
-        spent = 0f;
-        _dist.Clear(); _prev.Clear(); _done.Clear(); _open.Clear();
-
-        // sources: enemy provinces that already touch our land / occupied land
-        for (int i = 0; i < _cand.Count; i++)
-        {
-            Province p = _cand[i];
-            if (!_candSet.Contains(p.Id) || !Touches(w, side, p)) continue;
-            float c = _cost[p.Id];
-            if (c > budget) continue;
-            _dist[p.Id] = c; _prev[p.Id] = -1; _open.Add(p);
-        }
-
-        // cheapest-path search through enemy provinces
-        while (_open.Count > 0)
-        {
-            int bi = 0;
-            for (int i = 1; i < _open.Count; i++)
-                if (_dist[_open[i].Id] < _dist[_open[bi].Id]) bi = i;
-            Province cur = _open[bi];
-            _open[bi] = _open[_open.Count - 1];
-            _open.RemoveAt(_open.Count - 1);
-            if (!_done.Add(cur.Id)) continue;
-
-            float dc = _dist[cur.Id];
-            int[] nb = cur.Neighbors;
-            for (int i = 0; i < nb.Length; i++)
-            {
-                int id = nb[i];
-                if (!_candSet.Contains(id) || _done.Contains(id)) continue;
-                float nd = dc + _cost[id];
-                if (nd > budget) continue;
-                if (_dist.TryGetValue(id, out float old) && old <= nd) continue;
-                _dist[id] = nd; _prev[id] = cur.Id;
-                _open.Add(map.GetProvince(id));
-            }
-        }
-
-        // the potential target: highest desire among everything reachable within budget
-        Province target = null;
-        float bestDesire = -1f;
-        foreach (int id in _done)
-        {
-            int len = 0;
-            for (int c = id; c != -1; c = _prev[c]) len++;
-            if (_demand.Count + len > settings.maxDemandProvinces) continue;
-
-            float d = Desire(map.GetProvince(id));
-            if (d > bestDesire) { bestDesire = d; target = map.GetProvince(id); }
-        }
-        if (target == null) return false;
-
-        // take the target and everything on the way to it
-        spent = _dist[target.Id];
-        for (int c = target.Id; c != -1; c = _prev[c])
-        {
-            _demand.Add(c);
-            _mine.Add(c);
-            _candSet.Remove(c);
-        }
-        return true;
-    }
-
-    /// <summary>Fallback: provinces touching our border, cheapest first, until the budget is gone.</summary>
-    private void FillNearBorder(War w, WarSide side, float budget)
-    {
         while (_demand.Count < settings.maxDemandProvinces)
         {
             Province best = null;
             float bestCost = float.MaxValue;
+
+            // 1) provinces touching our land / land we occupy / provinces already demanded (cheapest first)
             for (int i = 0; i < _cand.Count; i++)
             {
                 Province p = _cand[i];
@@ -1487,12 +1402,42 @@ public partial class AIManager : TickBehaviour
                 float c = _cost[p.Id];
                 if (c <= budget && c < bestCost) { bestCost = c; best = p; }
             }
+
+            // 2) nothing touches (sea between us): nearest province to any of our land
+            if (best == null)
+            {
+                float bestD = float.MaxValue;
+                for (int i = 0; i < _cand.Count; i++)
+                {
+                    Province p = _cand[i];
+                    if (!_candSet.Contains(p.Id) || _cost[p.Id] > budget) continue;
+                    float d = DistToMine(p);
+                    if (d < bestD) { bestD = d; best = p; bestCost = _cost[p.Id]; }
+                }
+            }
             if (best == null) break;
+
             _demand.Add(best.Id);
-            _mine.Add(best.Id);
+            _mine.Add(best.Id);          // the next layer attaches to it
             _candSet.Remove(best.Id);
             budget -= bestCost;
         }
+
+        if (_demand.Count == 0) return false;
+        return WM.Decide(w, side, _demand);
+    }
+
+    private float DistToMine(Province p)
+    {
+        float best = float.MaxValue;
+        foreach (int id in _mine)
+        {
+            Province m = map.GetProvince(id);
+            if (m == null) continue;
+            float d = (m.Centroid - p.Centroid).sqrMagnitude;
+            if (d < best) best = d;
+        }
+        return best;
     }
 
     private bool Touches(War w, WarSide side, Province p)
@@ -1501,22 +1446,6 @@ public partial class AIManager : TickBehaviour
         int[] nb = p.Neighbors;
         for (int i = 0; i < nb.Length; i++) if (_mine.Contains(nb[i])) return true;
         return false;
-    }
-
-    /// <summary>How attractive a province is: income, population, growth, defence, capital.</summary>
-    private float Desire(Province p)
-    {
-        Nation o = p.Owner;
-        int c = o != null ? Mathf.Max(1, o.ProvinceCount) : 1;
-        float avgI = o != null ? (float)(o.Economy / c) + 0.0001f : 1f;
-        float avgP = o != null ? (float)(o.Population / c) + 1f : 1f;
-
-        float v = 0.4f * Mathf.Clamp(p.Income / avgI, 0f, 4f)
-                + 0.3f * Mathf.Clamp(p.Population / avgP, 0f, 4f)
-                + 0.15f * Mathf.Clamp(p.PopGrowth.Value / 0.13f, 0f, 3f)
-                + 0.1f * Mathf.Clamp(p.Defend.Value / 0.3f, 0f, 3f);
-        if (p.IsCapital) v += 1f;
-        return v + 0.05f;
     }
 
     [ContextMenu("AI: Log States")]

@@ -103,7 +103,7 @@ public class TacticVisuals : MonoBehaviour
         t.outlineWidth = 0.25f;
         t.outlineColor = new Color32(0, 0, 0, 255);
         float vh = ViewHeight(pos);
-        t.fontSize = vh * 0.4f;                    // ~4% of the view height
+        t.autoSizeTextContainer = true;
         t.sortingOrder = 21;
         go.AddComponent<TacticFade>().Init(null, t, col, life, vh * 0.03f);
     }

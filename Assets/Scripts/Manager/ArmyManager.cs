@@ -359,6 +359,13 @@ public class ArmyManager : TickBehaviour
     [SerializeField] private int debugRegiment = -1;
     [SerializeField] private float debugAmount = 20f;
 
+    [Header("Sea movement")]
+    public bool allowSeaMovement = true;
+    [Tooltip("Speed multiplier while the army is over water.")]
+    [Range(0.05f, 1f)] public float seaSpeedFactor = 0.5f;
+    [Tooltip("Max sea crossing between two provinces, in tiles (centroid to centroid).")]
+    [Min(1f)] public float seaRangeTiles = 60f;
+
     [Header("Inspector view (read-only mirror, Editor only)")]
     [SerializeField] private bool showMilitaryInInspector = true;
     [SerializeField] private List<MilitaryInfo> militaryView = new List<MilitaryInfo>();
@@ -654,11 +661,47 @@ public class ArmyManager : TickBehaviour
                 _bfsQ.Enqueue(m);
             }
         }
-        if (!found) return false;
+        if (!found)
+        {
+            if (!allowSeaMovement || !SeaSearch(from, to, restrictTo, avoid)) return false;
+        }
 
         for (int c = to.Id; c != from.Id; c = _bfsPrev[c]) result.Add(all[c]);
         result.Reverse();
         return true;
+    }
+
+    /// <summary>Fallback BFS: land neighbours plus any province within seaRangeTiles (a sea crossing).</summary>
+    private bool SeaSearch(Province from, Province to, Nation restrictTo, HashSet<int> avoid)
+    {
+        IReadOnlyList<Province> all = map.Provinces;
+        _stamp++;
+        _bfsQ.Clear();
+        _bfsQ.Enqueue(from.Id);
+        _bfsStamp[from.Id] = _stamp;
+        _bfsPrev[from.Id] = -1;
+
+        float r2 = seaRangeTiles * seaRangeTiles;
+        while (_bfsQ.Count > 0)
+        {
+            int c = _bfsQ.Dequeue();
+            if (c == to.Id) return true;
+            Province pc = all[c];
+
+            for (int m = 0; m < all.Count; m++)
+            {
+                if (_bfsStamp[m] == _stamp) continue;
+                Province q = all[m];
+                if (q.IsMerged || q.Tiles == null || q.Tiles.Length == 0) continue;
+                if ((q.Centroid - pc.Centroid).sqrMagnitude > r2) continue;
+                if (restrictTo != null && !CanEnter(restrictTo, q)) continue;
+                if (avoid != null && m != to.Id && avoid.Contains(m)) continue;
+                _bfsStamp[m] = _stamp;
+                _bfsPrev[m] = c;
+                _bfsQ.Enqueue(m);
+            }
+        }
+        return false;
     }
 
     /// <summary>World position -> position in the UI root. False when off screen / no canvas.</summary>
@@ -758,7 +801,10 @@ public class ArmyManager : TickBehaviour
             float speed = r.State == RegimentState.Retreating ? retreatSpeedTiles
                         : r.IsColumn ? reinforceSpeedTiles : moveSpeedTiles;
 
-            bool arrived = r.StepMove(speed * TileSize * deltaTime, this);
+            float step = speed * TileSize * deltaTime;
+            if (allowSeaMovement && map != null && map.TryWorldToTile(r.WorldPosition, out int tx, out int ty) && !map.IsLand(tx, ty))
+                step *= seaSpeedFactor;                      // over water: slower
+            bool arrived = r.StepMove(step, this);
             Province cp = map != null ? map.GetProvinceAt(r.WorldPosition) : null;   // the province under the army
             if (cp != null) r.CurrentProvince = cp;
 

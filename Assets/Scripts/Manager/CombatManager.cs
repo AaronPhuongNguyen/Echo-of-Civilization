@@ -358,8 +358,6 @@ public partial class CombatManager : TickBehaviour
             if (_reinforceAcc >= settings.reinforceInterval) { _reinforceAcc = 0f; ReinforceAll(); }
         }
 
-        PaintTrails();
-
         SiegeTick(deltaTime); SupportTick(deltaTime);
 
 #if UNITY_EDITOR
@@ -1061,7 +1059,7 @@ public partial class CombatManager : TickBehaviour
             if (ownerSide != mine)
             {
                 if (w.Occupied.TryGetValue(p.Id, out int cur) && w.SideOf(cur) == mine) continue;
-                if (wm.Occupy(w, me, p)) { PaintDisc(r.WorldPosition, me); return true; }
+                if (wm.Occupy(w, me, p)) return true;
             }
             else if (w.Occupied.TryGetValue(p.Id, out int occ) && w.SideOf(occ) != mine)
             {
@@ -1075,7 +1073,12 @@ public partial class CombatManager : TickBehaviour
     {
         if (p == null) return;
         if (_occupier.TryGetValue(p.Id, out int old) && (occupier == null || old != occupier.Id)) ClearProvincePixels(p);
-        if (occupier != null) _occupier[p.Id] = occupier.Id;
+
+        if (occupier != null)
+        {
+            _occupier[p.Id] = occupier.Id;
+            PaintProvince(p, occupier);        // the whole province, no holes
+        }
         else _occupier.Remove(p.Id);
     }
 
@@ -1120,59 +1123,6 @@ public partial class CombatManager : TickBehaviour
         if (_tex) Destroy(_tex);
         if (_ovGo) Destroy(_ovGo);
         _sprite = null; _tex = null; _ovGo = null; _px = null; _dirty = false;
-    }
-
-    private void PaintTrails()
-    {
-        if (_px == null || map == null) return;
-        IReadOnlyList<Regiment> moving = ArmyManager.Instance.MovingRegiments;
-        for (int i = 0; i < moving.Count; i++)
-        {
-            Regiment r = moving[i];
-            if (r.State != RegimentState.Moving || r.IsColumn || r.Military == null) continue;
-            if (!map.TryWorldToTile(r.WorldPosition, out int x, out int y)) continue;
-
-            var cur = new Vector2Int(x, y);
-            Nation n = r.Military.Nation;
-            if (r.TrailTile.x < 0) { PaintDisc(cur, n); r.TrailTile = cur; continue; }
-            if (r.TrailTile == cur) continue;
-
-            Vector2Int prev = r.TrailTile;
-            int steps = Mathf.Clamp(Mathf.Max(Mathf.Abs(cur.x - prev.x), Mathf.Abs(cur.y - prev.y)), 1, 64);
-            for (int s = 1; s <= steps; s++)
-            {
-                Vector2 q = Vector2.Lerp(prev, cur, s / (float)steps);
-                PaintDisc(new Vector2Int(Mathf.RoundToInt(q.x), Mathf.RoundToInt(q.y)), n);
-            }
-            r.TrailTile = cur;
-        }
-    }
-
-    private void PaintDisc(Vector3 world, Nation n)
-    {
-        if (_px == null || map == null || !map.TryWorldToTile(world, out int x, out int y)) return;
-        PaintDisc(new Vector2Int(x, y), n);
-    }
-
-    /// <summary>Paints only tiles of provinces that 'n' currently occupies.</summary>
-    private void PaintDisc(Vector2Int c, Nation n)
-    {
-        if (_px == null || n == null) return;
-        Color32 col = n.Color;
-        col.a = (byte)Mathf.RoundToInt(Mathf.Clamp01(trailAlpha) * 255f);
-        int R = Mathf.Max(1, trailRadiusTiles), R2 = R * R;
-
-        for (int dy = -R; dy <= R; dy++)
-            for (int dx = -R; dx <= R; dx++)
-            {
-                if (dx * dx + dy * dy > R2) continue;
-                int x = c.x + dx, y = c.y + dy;
-                if (!map.InBounds(x, y)) continue;
-                int pid = map.GetProvinceId(x, y);
-                if (pid < 0 || !_occupier.TryGetValue(pid, out int occ) || occ != n.Id) continue;
-                _px[(y / _ovScale) * _ovW + (x / _ovScale)] = col;
-                _dirty = true;
-            }
     }
 
     /// <summary>Fills EVERY tile of the province with the nation color (used for provinces occupied by spread).</summary>
