@@ -325,6 +325,8 @@ public class MapManager : MonoBehaviour
 
     public Vector3 TileToWorldCenter(int x, int y) =>
         transform.TransformPoint(new Vector3((x + 0.5f) * _s.tileSize, (y + 0.5f) * _s.tileSize, 0f) + PivotOffset);
+    /// <summary>Local offset of the map's bottom-left corner (the overlay uses it).</summary>
+    public Vector3 MapOrigin => PivotOffset;
 
     /// <summary>World-space rectangle covered by the map (only meaningful when IsReady).</summary>
     public Rect WorldRect
