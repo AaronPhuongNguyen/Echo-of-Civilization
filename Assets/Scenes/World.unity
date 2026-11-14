@@ -1367,12 +1367,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9e4ede4e93e5e7347b9e123eab3bf85d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  width: 256
+  width: 300
   height: 44
   offsetY: 0
   minScale: 0.7
   maxScale: 1.2
-  menPerNumber: 1000
   endGrace: 0.75
   maxViews: 64
   rebuildInterval: 0.05
@@ -1591,7 +1590,7 @@ MonoBehaviour:
   pinchZoomSpeed: 0.004
   zoomSmoothing: 10
   map: {fileID: 0}
-  boundsScale: 1.2
+  boundsScale: 1.5
 --- !u!114 &1939603380
 MonoBehaviour:
   m_ObjectHideFlags: 0

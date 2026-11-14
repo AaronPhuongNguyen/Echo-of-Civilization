@@ -153,7 +153,7 @@ public sealed class Regiment
     {
         if (Military == null || men <= 0.0) return;
         double lost = Math.Min(men, Manpower);
-        Manpower -= lost;
+        Manpower -= lost * TickManager.GameSpeed;
         Military.CurrentManpower = Math.Max(0.0, Military.CurrentManpower - lost);
         RefreshText();
         ArmyManager.Instance.CheckRetreat(this);
