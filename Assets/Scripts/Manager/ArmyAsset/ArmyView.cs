@@ -3,10 +3,9 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// The card of one regiment on a SCREEN SPACE canvas: a SQUARE in the nation color with ONE number inside.
-/// Number = men / ArmyManager.menPerValue (1 value = 1000 men, regiment max 100, reinforcement column max 10).
-/// No logic of its own: ArmyManager binds it to a Regiment while that regiment is on screen and positions it every
-/// LateUpdate from the regiment's world position. Pooled by PoolManager.
+/// The card of one regiment on a SCREEN SPACE canvas: a square in the nation color with ONE number inside.
+/// Size follows the zoom (ArmyManager.CardScale), so it is never "sometimes big, sometimes small".
+/// Pooled by PoolManager. No logic of its own.
 /// </summary>
 public class RegimentView : MonoBehaviour, IPoolable
 {
@@ -16,14 +15,13 @@ public class RegimentView : MonoBehaviour, IPoolable
     public TextMeshProUGUI ValueText { get; private set; }
     public Regiment Regiment { get; private set; }
 
-    private const float ColumnScale = 0.7f;      // reinforcement columns are drawn smaller
     private const int MaxCachedValue = 200;
     private static string[] s_numbers;
 
     private int _shownValue = -1;
     private bool _textVisible = true;
+    private float _appliedScale = -1f;
 
-    // what the layout was last built for (re-applied only when the settings change)
     private int _appliedSize = -1;
     private Sprite _appliedBg;
     private TMP_FontAsset _appliedFont;
@@ -38,9 +36,9 @@ public class RegimentView : MonoBehaviour, IPoolable
     {
         Regiment = null;
         _shownValue = -1;
+        _appliedScale = -1f;
     }
 
-    /// <summary>Called by ArmyManager right after the card is taken from the pool.</summary>
     internal void Bind(Regiment regiment, ArmyManager army)
     {
         Regiment = regiment;
@@ -50,8 +48,8 @@ public class RegimentView : MonoBehaviour, IPoolable
         Background.color = new Color(nation.r, nation.g, nation.b, army.BackgroundAlpha);
         ValueText.color = Color.white;
 
-        float s = regiment.IsColumn ? ColumnScale : 1f;
-        transform.localScale = new Vector3(s, s, 1f);
+        _appliedScale = -1f;
+        SetScale(army.CardScale, army.columnScale);
 
         _shownValue = -1;
         _textVisible = true;
@@ -65,6 +63,15 @@ public class RegimentView : MonoBehaviour, IPoolable
 
     public void SetLocalPosition(Vector2 local) => ((RectTransform)transform).anchoredPosition = local;
 
+    /// <summary>Zoom scale (columns are slightly smaller). Applied only when it changes.</summary>
+    internal void SetScale(float scale, float columnScale)
+    {
+        float s = scale * (Regiment != null && Regiment.IsColumn ? columnScale : 1f);
+        if (Mathf.Abs(s - _appliedScale) < 0.001f) return;
+        _appliedScale = s;
+        transform.localScale = new Vector3(s, s, 1f);
+    }
+
     public void SetTextVisible(bool visible)
     {
         if (visible == _textVisible) return;
@@ -73,7 +80,6 @@ public class RegimentView : MonoBehaviour, IPoolable
         ValueText.gameObject.SetActive(visible);
     }
 
-    /// <summary>Rewrites the text only when the SHOWN value changes, and never while the text is hidden.</summary>
     public void SetManpower(double manpower)
     {
         if (ValueText == null || !_textVisible || !ArmyManager.HasInstance) return;
@@ -106,7 +112,7 @@ public class RegimentView : MonoBehaviour, IPoolable
             var bgGo = new GameObject("Square", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
             bgGo.transform.SetParent(root, false);
             Background = bgGo.GetComponent<Image>();
-            Background.raycastTarget = false;          // the card must never block clicks on the map
+            Background.raycastTarget = false;
 
             var textGo = new GameObject("Value", typeof(RectTransform));
             textGo.transform.SetParent(root, false);
@@ -124,9 +130,8 @@ public class RegimentView : MonoBehaviour, IPoolable
         _appliedBg = army.BackgroundSprite;
         _appliedFont = army.FontAsset;
 
-        Vector2 rect = army.RegimentRect;      // square
+        Vector2 rect = army.RegimentRect;
 
-        // positioned by anchoredPosition inside the full-screen "Regiments" root (center anchors)
         root.anchorMin = root.anchorMax = root.pivot = new Vector2(0.5f, 0.5f);
         root.sizeDelta = rect;
 

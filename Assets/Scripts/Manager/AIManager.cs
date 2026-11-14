@@ -418,6 +418,7 @@ public class AIManager : TickBehaviour
             map.OnProvincesMerged += HandleMerged;
             if (map.IsReady) Rebuild();
         }
+        if (ArmyManager.HasInstance) ArmyManager.Instance.OnRegimentRemoved += (r, d) => _nextSnap = 0f;
     }
 
     protected override void OnDisable()
@@ -464,6 +465,8 @@ public class AIManager : TickBehaviour
     /// <summary>A merged province may be a staging / strike target of an operation: those operations are cancelled.</summary>
     private void HandleMerged(Province origin, IReadOnlyList<Province> absorbed)
     {
+        _regsAt = null;      // province ids changed: force a rebuild
+        _nextSnap = 0f;
         for (int i = 0; i < _list.Count; i++)
         {
             AIState s = _list[i];
@@ -874,20 +877,29 @@ public class AIManager : TickBehaviour
 
     private double EnemyMen(Nation me, Province p)
     {
-        List<Regiment> l = p != null && _regsAt != null ? _regsAt[p.Id] : null;
+        List<Regiment> l = p != null && _regsAt != null && p.Id < _regsAt.Length ? _regsAt[p.Id] : null;
         if (l == null) return 0.0;
         double s = 0.0;
-        for (int i = 0; i < l.Count; i++) if (Hostile(me, l[i].Military.Nation)) s += l[i].Manpower;
+        for (int i = 0; i < l.Count; i++)
+        {
+            Regiment r = l[i];
+            if (r.Military == null) continue;                     // released since the snapshot
+            if (Hostile(me, r.Military.Nation)) s += r.Manpower;
+        }
         return s;
     }
 
     private double EnemyDefPower(Nation me, Province p)
     {
-        List<Regiment> l = p != null && _regsAt != null ? _regsAt[p.Id] : null;
+        List<Regiment> l = p != null && _regsAt != null && p.Id < _regsAt.Length ? _regsAt[p.Id] : null;
         if (l == null) return 0.0;
         double s = 0.0;
         for (int i = 0; i < l.Count; i++)
-            if (Hostile(me, l[i].Military.Nation)) s += l[i].Manpower * l[i].Military.DefendPerMan.Value;
+        {
+            Regiment r = l[i];
+            if (r.Military == null) continue;
+            if (Hostile(me, r.Military.Nation)) s += r.Manpower * r.Military.DefendPerMan.Value;
+        }
         return s;
     }
 
@@ -956,6 +968,7 @@ public class AIManager : TickBehaviour
                 if (l == null) continue;
                 for (int j = 0; j < l.Count; j++)
                 {
+                    if (l[j].Military == null) continue;
                     Nation o = l[j].Military.Nation;
                     if (o != n && !rel.IsAllied(n, o) && rel.GetValue(n, o) < 20f) _intruders.Add(o);
                 }

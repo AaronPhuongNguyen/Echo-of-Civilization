@@ -5,13 +5,6 @@ using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ARMY JOBS  (Burst-compiled, run on worker threads)
-//   ProjectionBatch : world -> screen for every regiment card in one parallel job.
-//   CombatBatch     : radius based combat (damage + dice + push) for every regiment in one parallel job.
-//  Managers never touch Unity.Mathematics types: they use these two small wrappers.
-// ─────────────────────────────────────────────────────────────────────────────
-
 #region Helpers
 
 internal static class JobUtil
@@ -22,6 +15,14 @@ internal static class JobUtil
     public static void Free<T>(ref NativeArray<T> a) where T : struct
     {
         if (a.IsCreated) a.Dispose();
+    }
+}
+
+internal static class CombatGrid
+{
+    public static int Hash(int x, int y, int mask)
+    {
+        unchecked { return (int)(((uint)x * 73856093u ^ (uint)y * 19349663u) & (uint)mask); }
     }
 }
 
@@ -48,7 +49,6 @@ public sealed class ProjectionBatch : IDisposable
 
     public void Set(int i, Vector3 world) => _pos[i] = world;
 
-    /// <summary>Projects 'count' positions. Visible = inside the screen enlarged by 10%.</summary>
     public void Run(Camera cam, int count, int screenW, int screenH)
     {
         if (count <= 0) return;
@@ -106,27 +106,24 @@ public sealed class ProjectionBatch : IDisposable
 #region Combat
 
 /// <summary>
-/// One combat step for all regiments at once.
+/// One combat step for all regiments: spatial grid (counting sort) + parallel damage job.
 ///   outer radius : two hostile regiments inside it (min of both radii) hurt each other.
-///   inner radius : they collide: marching stops and the stronger side pushes the weaker back.
-///   dice         : stateless. Every pair re-rolls every 'rollDays' (own phase per pair); the winner side gets
-///                  ATK and DEF * (1 + bonus) for 'buffDays'. No other bonus exists.
-///   damage       : eff = ATK^2 / (ATK + DEF), hp = eff * damageScale * damageMultiplier * dt
-///   push         : stronger share (0.5..1) maps to 0..march speed (pushStart..pushFull).
+///   inner radius : contact flag (the battle logic in CombatManager pushes / stops armies).
+///   dice         : stateless pair roll, the only modifier.
+///   output       : hp lost, flags, index of the nearest hostile unit (used to cluster battles).
 /// </summary>
 public sealed class CombatBatch : IDisposable
 {
     public const byte FlagInRange = 1, FlagInContact = 2;
 
-    private NativeArray<float3> _pos, _outPush, _outTarget;
+    private NativeArray<float3> _pos;
     private NativeArray<float> _men, _atk, _def, _dmg, _outer, _inner, _outHp;
-    private NativeArray<int> _nation, _uid;
+    private NativeArray<int> _nation, _uid, _outNear, _cx, _cy, _cellStart, _cellItems, _cellFill;
     private NativeArray<byte> _hostile, _outFlags;
     private int _cap, _nationCap;
     private JobHandle _handle;
 
     public bool Pending { get; private set; }
-    public int NationCap => _nationCap;
 
     public void Reserve(int n, int nationCap)
     {
@@ -136,11 +133,14 @@ public sealed class CombatBatch : IDisposable
         {
             FreeUnits();
             _cap = Mathf.Max(256, Mathf.NextPowerOfTwo(n));
-            _pos = JobUtil.Alloc<float3>(_cap); _outPush = JobUtil.Alloc<float3>(_cap); _outTarget = JobUtil.Alloc<float3>(_cap);
+            int table = Mathf.NextPowerOfTwo(Mathf.Max(64, _cap * 2));
+            _pos = JobUtil.Alloc<float3>(_cap);
             _men = JobUtil.Alloc<float>(_cap); _atk = JobUtil.Alloc<float>(_cap); _def = JobUtil.Alloc<float>(_cap);
             _dmg = JobUtil.Alloc<float>(_cap); _outer = JobUtil.Alloc<float>(_cap); _inner = JobUtil.Alloc<float>(_cap);
             _outHp = JobUtil.Alloc<float>(_cap);
-            _nation = JobUtil.Alloc<int>(_cap); _uid = JobUtil.Alloc<int>(_cap);
+            _nation = JobUtil.Alloc<int>(_cap); _uid = JobUtil.Alloc<int>(_cap); _outNear = JobUtil.Alloc<int>(_cap);
+            _cx = JobUtil.Alloc<int>(_cap); _cy = JobUtil.Alloc<int>(_cap); _cellItems = JobUtil.Alloc<int>(_cap);
+            _cellStart = JobUtil.Alloc<int>(table + 2); _cellFill = JobUtil.Alloc<int>(table + 1);
             _outFlags = JobUtil.Alloc<byte>(_cap);
         }
         if (nationCap != _nationCap || !_hostile.IsCreated)
@@ -163,17 +163,36 @@ public sealed class CombatBatch : IDisposable
         _hostile[b * _nationCap + a] = 1;
     }
 
-    /// <summary>nation = -1 excludes the regiment from combat.</summary>
     public void Set(int i, Vector3 pos, float men, float atk, float def, float dmgMul, float outer, float inner, int nation, int uid)
     {
         _pos[i] = pos; _men[i] = men; _atk[i] = atk; _def[i] = def; _dmg[i] = dmgMul;
         _outer[i] = outer; _inner[i] = inner; _nation[i] = nation; _uid[i] = uid;
     }
 
-    public void Schedule(int count, int day, float dt, float damageScale, bool useDice, float diceBonus,
-                         int rollDays, int buffDays, float march, float pushStart, float pushFull)
+    /// <param name="cell">Grid cell size: must be >= the largest outer radius.</param>
+    public void Schedule(int count, float cell, int day, float dt, float damageScale, bool useDice, float diceBonus,
+                         int rollDays, int buffDays)
     {
         if (count <= 0 || Pending) return;
+        int table = Mathf.NextPowerOfTwo(Mathf.Max(64, count * 2));
+        int mask = table - 1;
+        float invCell = 1f / Mathf.Max(0.0001f, cell);
+
+        var grid = new GridJob
+        {
+            pos = _pos,
+            nation = _nation,
+            cx = _cx,
+            cy = _cy,
+            cellStart = _cellStart,
+            cellItems = _cellItems,
+            cellFill = _cellFill,
+            count = count,
+            mask = mask,
+            invCell = invCell
+        };
+        JobHandle gh = grid.Schedule();
+
         var job = new CombatJob
         {
             pos = _pos,
@@ -186,11 +205,16 @@ public sealed class CombatBatch : IDisposable
             nation = _nation,
             uid = _uid,
             hostile = _hostile,
+            cx = _cx,
+            cy = _cy,
+            cellStart = _cellStart,
+            cellItems = _cellItems,
             outHp = _outHp,
             outFlags = _outFlags,
-            outPush = _outPush,
-            outTarget = _outTarget,
+            outNear = _outNear,
             count = count,
+            mask = mask,
+            invCell = invCell,
             nationCap = _nationCap,
             day = day,
             dt = dt,
@@ -198,14 +222,11 @@ public sealed class CombatBatch : IDisposable
             useDice = useDice ? 1 : 0,
             diceBonus = diceBonus,
             rollDays = Mathf.Max(1, rollDays),
-            buffDays = Mathf.Max(0, buffDays),
-            march = march,
-            pushStart = pushStart,
-            pushFull = pushFull
+            buffDays = Mathf.Max(0, buffDays)
         };
-        _handle = job.Schedule(count, 8);
+        _handle = job.Schedule(count, 16, gh);
         Pending = true;
-        JobHandle.ScheduleBatchedJobs();      // start the workers now, the result is collected in LateUpdate
+        JobHandle.ScheduleBatchedJobs();
     }
 
     public void Complete()
@@ -217,16 +238,17 @@ public sealed class CombatBatch : IDisposable
 
     public float Hp(int i) => _outHp[i];
     public byte Flags(int i) => _outFlags[i];
-    public Vector3 Push(int i) => _outPush[i];
-    public Vector3 Target(int i) => _outTarget[i];
+    public int Near(int i) => _outNear[i];
 
     private void FreeUnits()
     {
-        JobUtil.Free(ref _pos); JobUtil.Free(ref _outPush); JobUtil.Free(ref _outTarget);
+        JobUtil.Free(ref _pos);
         JobUtil.Free(ref _men); JobUtil.Free(ref _atk); JobUtil.Free(ref _def);
         JobUtil.Free(ref _dmg); JobUtil.Free(ref _outer); JobUtil.Free(ref _inner);
         JobUtil.Free(ref _outHp);
-        JobUtil.Free(ref _nation); JobUtil.Free(ref _uid);
+        JobUtil.Free(ref _nation); JobUtil.Free(ref _uid); JobUtil.Free(ref _outNear);
+        JobUtil.Free(ref _cx); JobUtil.Free(ref _cy); JobUtil.Free(ref _cellItems);
+        JobUtil.Free(ref _cellStart); JobUtil.Free(ref _cellFill);
         JobUtil.Free(ref _outFlags);
         _cap = 0;
     }
@@ -240,18 +262,48 @@ public sealed class CombatBatch : IDisposable
     }
 
     [BurstCompile]
+    private struct GridJob : IJob
+    {
+        [ReadOnly] public NativeArray<float3> pos;
+        [ReadOnly] public NativeArray<int> nation;
+        public NativeArray<int> cx, cy, cellStart, cellItems, cellFill;
+        public int count, mask;
+        public float invCell;
+
+        public void Execute()
+        {
+            for (int k = 0; k <= mask + 1; k++) cellStart[k] = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (nation[i] < 0) { cx[i] = int.MinValue; cy[i] = 0; continue; }
+                int x = (int)math.floor(pos[i].x * invCell), y = (int)math.floor(pos[i].y * invCell);
+                cx[i] = x; cy[i] = y;
+                cellStart[CombatGrid.Hash(x, y, mask) + 1]++;
+            }
+            for (int k = 0; k <= mask; k++) cellStart[k + 1] += cellStart[k];
+            for (int k = 0; k <= mask; k++) cellFill[k] = cellStart[k];
+            for (int i = 0; i < count; i++)
+            {
+                if (cx[i] == int.MinValue) continue;
+                int h = CombatGrid.Hash(cx[i], cy[i], mask);
+                cellItems[cellFill[h]++] = i;
+            }
+        }
+    }
+
+    [BurstCompile]
     private struct CombatJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<float3> pos;
         [ReadOnly] public NativeArray<float> men, atk, def, dmg, outer, inner;
-        [ReadOnly] public NativeArray<int> nation, uid;
+        [ReadOnly] public NativeArray<int> nation, uid, cx, cy, cellStart, cellItems;
         [ReadOnly] public NativeArray<byte> hostile;
         [WriteOnly] public NativeArray<float> outHp;
         [WriteOnly] public NativeArray<byte> outFlags;
-        [WriteOnly] public NativeArray<float3> outPush, outTarget;
+        [WriteOnly] public NativeArray<int> outNear;
 
-        public int count, nationCap, day, useDice, rollDays, buffDays;
-        public float dt, damageScale, diceBonus, march, pushStart, pushFull;
+        public int count, mask, nationCap, day, useDice, rollDays, buffDays;
+        public float invCell, dt, damageScale, diceBonus;
 
         private static uint Hash(uint a, uint b)
         {
@@ -265,86 +317,68 @@ public sealed class CombatBatch : IDisposable
         public void Execute(int i)
         {
             int ni = nation[i];
-            if (ni < 0)
-            {
-                outHp[i] = 0f; outFlags[i] = 0; outPush[i] = float3.zero; outTarget[i] = float3.zero;
-                return;
-            }
+            if (ni < 0) { outHp[i] = 0f; outFlags[i] = 0; outNear[i] = -1; return; }
 
             float3 pi = pos[i];
-            float menI = men[i], atkI = atk[i], defI = def[i];
+            float menI = men[i], defI = def[i];
             uint uidI = (uint)uid[i];
             int row = ni * nationCap;
-            float invSpan = 1f / math.max(0.0001f, pushFull - pushStart);
+            int cxi = cx[i], cyi = cy[i];
 
             float hp = 0f;
-            int flags = 0;
-            float3 push = float3.zero;
-            float3 target = pi;
+            int flags = 0, near = -1;
             float best = float.MaxValue;
 
-            for (int j = 0; j < count; j++)
-            {
-                if (j == i) continue;
-                int nj = nation[j];
-                if (nj < 0 || hostile[row + nj] == 0) continue;
-
-                float3 d = pi - pos[j];
-                float d2 = math.lengthsq(d);
-                float rOut = math.min(outer[i], outer[j]);
-                if (d2 > rOut * rOut) continue;
-
-                flags |= 1;
-                if (d2 < best) { best = d2; target = pos[j]; }
-
-                // ── dice: the ONLY modifier. Stateless: derived from the pair ids and the date ──
-                float mi = 1f, mj = 1f;
-                if (useDice != 0)
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = -1; dy <= 1; dy++)
                 {
-                    uint uidJ = (uint)uid[j];
-                    uint lo = math.min(uidI, uidJ), hi = math.max(uidI, uidJ);
-                    uint h = Hash(lo, hi);
-                    int shifted = day + (int)(h % (uint)rollDays);
-                    int epoch = shifted / rollDays;
-                    int phase = shifted - epoch * rollDays;
-                    if (phase < buffDays)
+                    int tx = cxi + dx, ty = cyi + dy;
+                    int hcell = CombatGrid.Hash(tx, ty, mask);
+                    int end = cellStart[hcell + 1];
+                    for (int k = cellStart[hcell]; k < end; k++)
                     {
-                        bool loBuffed = (Hash(h, (uint)epoch) & 1u) == 0u;
-                        bool iIsLo = uidI < uidJ;
-                        if (iIsLo == loBuffed) mi += diceBonus; else mj += diceBonus;
+                        int j = cellItems[k];
+                        if (j == i || cx[j] != tx || cy[j] != ty) continue;
+                        int nj = nation[j];
+                        if (hostile[row + nj] == 0) continue;
+
+                        float3 d = pi - pos[j];
+                        float d2 = math.lengthsq(d);
+                        float rOut = math.min(outer[i], outer[j]);
+                        if (d2 > rOut * rOut) continue;
+
+                        flags |= 1;
+                        if (d2 < best) { best = d2; near = j; }
+                        float rIn = math.min(inner[i], inner[j]);
+                        if (d2 <= rIn * rIn) flags |= 2;
+
+                        float mi = 1f, mj = 1f;
+                        if (useDice != 0)
+                        {
+                            uint uidJ = (uint)uid[j];
+                            uint lo = math.min(uidI, uidJ), hi = math.max(uidI, uidJ);
+                            uint h = Hash(lo, hi);
+                            int shifted = day + (int)(h % (uint)rollDays);
+                            int epoch = shifted / rollDays;
+                            int phase = shifted - epoch * rollDays;
+                            if (phase < buffDays)
+                            {
+                                bool loBuffed = (Hash(h, (uint)epoch) & 1u) == 0u;
+                                bool iIsLo = uidI < uidJ;
+                                if (iIsLo == loBuffed) mi += diceBonus; else mj += diceBonus;
+                            }
+                        }
+
+                        float atkJ = men[j] * atk[j] * mj;
+                        float defIt = menI * defI * mi;
+                        float eff = atkJ > 0f ? atkJ * atkJ / (atkJ + defIt) : 0f;
+                        hp += eff * damageScale * dmg[j] * dt;
                     }
                 }
 
-                // ── damage from j to i ──
-                float atkJ = men[j] * atk[j] * mj;
-                float defIt = menI * defI * mi;
-                float eff = atkJ > 0f ? atkJ * atkJ / (atkJ + defIt) : 0f;
-                hp += eff * damageScale * dmg[j] * dt;
-
-                // ── collision: stronger pushes the weaker back, at most the march speed ──
-                float rIn = math.min(inner[i], inner[j]);
-                if (d2 <= rIn * rIn)
-                {
-                    flags |= 2;
-                    float si = menI * (atkI + defI) * mi;
-                    float sj = men[j] * (atk[j] + def[j]) * mj;
-                    float sum = si + sj;
-                    float share = sum > 0f ? si / sum : 0.5f;
-                    float strong = math.max(share, 1f - share);
-                    float t = math.saturate((strong - pushStart) * invSpan);
-                    float3 dir = math.normalizesafe(d, new float3(1f, 0f, 0f));
-                    if (share < 0.5f) push += dir * (t * march);    // weaker: pushed away
-                    else push -= dir * (t * march);                 // stronger: follows the enemy
-                }
-            }
-
-            float len = math.length(push);
-            if (len > march && len > 0f) push *= march / len;
-
             outHp[i] = hp;
             outFlags[i] = (byte)flags;
-            outPush[i] = push;
-            outTarget[i] = target;
+            outNear[i] = near;
         }
     }
 }
