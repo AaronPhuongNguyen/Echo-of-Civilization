@@ -2247,5 +2247,10 @@ public class MapManager : MonoBehaviour
         }
     }
 
+    [ContextMenu("Speed Up")]
+    public void SpeedUp() => EventBus.RaiseSpeedUp();
+    [ContextMenu("Speed Down")]
+    public void SpeedDown() => EventBus.RaiseSpeedDown();
+
     #endregion
 }
