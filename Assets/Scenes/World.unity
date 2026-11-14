@@ -1315,8 +1315,11 @@ MonoBehaviour:
     diceBuffDays: 6
     pushStartShare: 0.5
     pushFullShare: 0.75
+    pusherAdvances: 1
     occupyDays: 3
     defendDivisor: 1
+    occupyOnPath: 1
+    pathOccupyDefendLimit: 2
     reinforcements: 1
     reinforceInterval: 3
     reinforceBelowPercent: 99
@@ -1645,9 +1648,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   map: {fileID: 1905439404}
   screenCanvas: {fileID: 1613407035}
-  backgroundSprite: {fileID: 21300000, guid: d474c929123057e4aa307f0be10b79a5, type: 3}
+  backgroundSprite: {fileID: 21300000, guid: eb5202e4e0328a540be5f488bb53fcff, type: 3}
   fontAsset: {fileID: 11400000, guid: 03f780b01b9b2e640984a49e5a44edd1, type: 2}
-  regimentSize: 50
+  regimentSize: 45
   backgroundAlpha: 1
   menPerValue: 1000
   maxRegimentValue: 100
@@ -1667,11 +1670,13 @@ MonoBehaviour:
   chargeTreasury: 1
   moveSpeedTiles: 4
   reinforceSpeedTiles: 6
+  pushAdvanceFactor: 0.5
   allowSeaMovement: 1
   seaSpeedFactor: 0.5
   seaRangeTiles: 100
   maxSeaNodes: 2500
-  stackSpacing: 1.1
+  pileOffset: 0.22
+  pileMaxDepth: 4
   viewCamera: {fileID: 0}
   textMaxVisibleTiles: 200
   markerMaxVisibleTiles: 600
