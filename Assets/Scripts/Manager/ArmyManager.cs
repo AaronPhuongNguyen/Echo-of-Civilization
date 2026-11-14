@@ -331,6 +331,11 @@ public class MilitaryInfo
 //           retreating or pushed in combat).
 //   VISUAL: each LateUpdate (only when something changed) all positions are projected to the screen by ONE Burst job
 //           and a pooled RegimentView (a square with the men count) is placed there. Fog of War is decided by PlayerManager.
+//           Standing regiments of one nation in one province are drawn as a PILE (cards overlap with a small
+//           diagonal offset, the first one in front), not as a long column.
+//   PUSH  : the pusher of a collision (see CombatManager) keeps marching slowly and shoves the weaker army ahead of it.
+//   PATH  : every time a marching regiment enters a new province OnRegimentEnteredProvince is raised
+//           (CombatManager uses it to occupy / liberate provinces on the march).
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-700)]
 public class ArmyManager : TickBehaviour
@@ -418,6 +423,8 @@ public class ArmyManager : TickBehaviour
     [Min(0f)] public float moveSpeedTiles = 4f;
     [Tooltip("Reinforcement column speed in tiles per game-second.")]
     [Min(0f)] public float reinforceSpeedTiles = 6f;
+    [Tooltip("The PUSHER of a collision keeps marching at this share of the march speed and shoves the weaker army ahead of it.")]
+    [Range(0.05f, 1f)] public float pushAdvanceFactor = 0.5f;
 
     [Header("Sea movement")]
     public bool allowSeaMovement = true;
@@ -429,8 +436,10 @@ public class ArmyManager : TickBehaviour
     [Min(100)] public int maxSeaNodes = 2500;
 
     [Header("Visual")]
-    [Tooltip("Regiments of the same nation in the same province are stacked downwards (screen), this many card heights apart.")]
-    [Min(0f)] public float stackSpacing = 1.1f;
+    [Tooltip("Regiments of the same nation in the same province form a PILE: every card behind the first one is shifted diagonally by this many card sizes (0 = perfectly on top of each other).")]
+    [Range(0f, 1f)] public float pileOffset = 0.22f;
+    [Tooltip("The pile never spreads further than this many steps (bigger stacks keep the last offset).")]
+    [Min(0)] public int pileMaxDepth = 4;
     [SerializeField] private Camera viewCamera;
     [Tooltip("The number is shown only while the screen is at most this many tiles wide. 0 = always.")]
     [Min(0f)] public float textMaxVisibleTiles = 250f;
@@ -465,6 +474,10 @@ public class ArmyManager : TickBehaviour
     private readonly List<Military> _list = new List<Military>();
     private readonly List<Regiment> _moving = new List<Regiment>();
 
+    // provinces entered during one MoveRegiments pass (events are raised AFTER the loop: handlers may end wars / move armies)
+    private readonly List<Regiment> _enteredR = new List<Regiment>(16);
+    private readonly List<Province> _enteredP = new List<Province>(16);
+
     private RectTransform _root;
     private RegimentView _template;
     private MapManager _subscribedMap;
@@ -491,6 +504,8 @@ public class ArmyManager : TickBehaviour
     public event Action<Regiment, bool> OnRegimentRemoved;
     public event Action<Regiment, Province> OnRegimentRetreat;
     public event Action<Regiment> OnRegimentArrived;
+    /// <summary>A marching (not retreating) regiment crossed into another province. Raised after the movement pass.</summary>
+    public event Action<Regiment, Province> OnRegimentEnteredProvince;
 
     protected override int TickPriority => -700;
 
@@ -586,6 +601,8 @@ public class ArmyManager : TickBehaviour
         _list.Clear();
         _militaries.Clear();
         _moving.Clear();
+        _enteredR.Clear();
+        _enteredP.Clear();
         _prepDirty = false;
     }
 
@@ -930,11 +947,18 @@ public class ArmyManager : TickBehaviour
         for (int i = 0; i < _list.Count; i++) _list[i].DailyUpdate(this);
     }
 
-    /// <summary>Real movement on the map (world units): marching armies, retreating armies and reinforcement columns.</summary>
+    /// <summary>
+    /// Real movement on the map (world units): marching armies, retreating armies and reinforcement columns.
+    /// A regiment in CONTACT with an enemy normally stands still, except the PUSHER (set by CombatManager):
+    /// it keeps advancing at pushAdvanceFactor and shoves the weaker army back along its way.
+    /// </summary>
     private void MoveRegiments(float deltaTime)
     {
         if (_moving.Count == 0) return;
         float tile = TileSize;
+        double now = TickManager.GameTime;
+        _enteredR.Clear();
+        _enteredP.Clear();
 
         for (int i = _moving.Count - 1; i >= 0; i--)
         {
@@ -944,16 +968,23 @@ public class ArmyManager : TickBehaviour
             { SwapRemoveMoving(i); continue; }
 
             bool retreating = r.State == RegimentState.Retreating;
-            if (r.InContact && !retreating) continue;         // collided with an enemy: stands and fights
+            bool pushing = !retreating && r.PushingUntil > now;
+            if (r.InContact && !retreating && !pushing) continue;   // collided with a stronger / equal enemy: stands and fights
 
             float speed = retreating ? retreatSpeedTiles : r.IsColumn ? reinforceSpeedTiles : moveSpeedTiles;
             float step = speed * tile * deltaTime;
+            if (pushing && r.InContact) step *= pushAdvanceFactor;                  // shoving: slower than a free march
             if (allowSeaMovement && map != null && map.TryWorldToTile(r.WorldPosition, out int tx, out int ty) && !map.IsLand(tx, ty))
                 step *= seaSpeedFactor;                      // over water: slower
 
+            Province before = r.CurrentProvince;
             bool arrived = r.StepMove(step, this);
             Province cp = map != null ? map.GetProvinceAt(r.WorldPosition) : null;   // the province under the army
-            if (cp != null) r.CurrentProvince = cp;
+            if (cp != null)
+            {
+                r.CurrentProvince = cp;
+                if (!retreating && cp != before) { _enteredR.Add(r); _enteredP.Add(cp); }
+            }
 
             if (arrived)
             {
@@ -964,6 +995,19 @@ public class ArmyManager : TickBehaviour
             }
         }
         _lodDirty = true;
+
+        // province-entered events AFTER the loop: a handler may occupy a province, end a war and re-route armies
+        if (_enteredR.Count > 0)
+        {
+            for (int i = 0; i < _enteredR.Count; i++)
+            {
+                Regiment r = _enteredR[i];
+                if (r.Military == null) continue;
+                OnRegimentEnteredProvince?.Invoke(r, _enteredP[i]);
+            }
+            _enteredR.Clear();
+            _enteredP.Clear();
+        }
     }
 
     #endregion
@@ -1007,7 +1051,8 @@ public class ArmyManager : TickBehaviour
         float visibleTiles = VisibleTiles(cam);
         bool showMarkers = markerMaxVisibleTiles <= 0f || visibleTiles <= markerMaxVisibleTiles;
         bool showText = showMarkers && (textMaxVisibleTiles <= 0f || visibleTiles <= textMaxVisibleTiles);
-        float stackStep = RegimentRect.y * stackSpacing;
+        float pileStep = RegimentRect.y * pileOffset;
+        int pileDepth = Mathf.Max(0, pileMaxDepth);
 
         // 1) collect the regiments whose nation is visible (Fog of War), release every other card
         int upper = 0;
@@ -1050,7 +1095,20 @@ public class ArmyManager : TickBehaviour
             else RectTransformUtility.ScreenPointToLocalPointInRectangle(root, sp, canvasCam, out local);
 
             bool travelling = r.IsColumn || r.State == RegimentState.Retreating || r.State == RegimentState.Moving || r.InContact;
-            if (!travelling) local.y -= r.StackIndex * stackStep;
+
+            // standing regiments of one province = a PILE: first card in front, the others peek out diagonally behind it
+            bool behind = !travelling && r.StackIndex > 0;
+            if (!travelling && r.StackIndex > 0)
+            {
+                float off = pileStep * Mathf.Min(r.StackIndex, pileDepth);
+                local.x += off;
+                local.y -= off;
+            }
+            if (behind != r.ViewBehind)
+            {
+                r.ViewBehind = behind;
+                if (behind) r.View.transform.SetAsFirstSibling(); else r.View.transform.SetAsLastSibling();
+            }
 
             r.View.SetLocalPosition(local);
             r.View.SetTextVisible(showText);
@@ -1085,6 +1143,8 @@ public class ArmyManager : TickBehaviour
         RegimentView v = PoolManager.Instance.Spawn(GetTemplate(), Vector3.zero, Quaternion.identity, root);
         if (v == null) return false;
         v.transform.localRotation = Quaternion.identity;
+        v.transform.SetAsLastSibling();
+        r.ViewBehind = false;
         r.View = v;
         v.Bind(r, this);
         return true;
@@ -1095,6 +1155,7 @@ public class ArmyManager : TickBehaviour
         RegimentView v = r.View;
         if (v == null) return;
         r.View = null;
+        r.ViewBehind = false;
         if (PoolManager.HasInstance) PoolManager.Instance.Despawn(v.gameObject);
         else Destroy(v.gameObject);
     }
@@ -1174,7 +1235,7 @@ public class ArmyManager : TickBehaviour
 
     private readonly Dictionary<int, int> _stackCount = new Dictionary<int, int>();
 
-    /// <summary>Gives every regiment its stack index: k-th regiment (list order) of the same nation in the same province. O(n).</summary>
+    /// <summary>Gives every regiment its pile index: k-th regiment (list order) of the same nation in the same province. O(n).</summary>
     internal void RefreshStacks(Military m)
     {
         _stackCount.Clear();

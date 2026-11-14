@@ -32,6 +32,7 @@ public sealed class Regiment
     /// <summary>Unique id (used for the stateless dice roll of a pair).</summary>
     public readonly int Uid;
 
+    /// <summary>Null once the regiment was released (destroyed / disbanded). Code that keeps old references must check it.</summary>
     public Military Military { get; private set; }
     /// <summary>Last province reached (the old one while retreating).</summary>
     public Province Province { get; private set; }
@@ -47,6 +48,8 @@ public sealed class Regiment
 
     public int StackIndex { get; internal set; }
     public RegimentView View { get; internal set; }
+    /// <summary>True while the card is sent behind the other cards of its pile (visual only).</summary>
+    internal bool ViewBehind;
     /// <summary>Index inside ArmyManager's moving list (-1 = not moving). Makes add / remove O(1).</summary>
     internal int MovingIndex = -1;
 
@@ -62,6 +65,10 @@ public sealed class Regiment
     public bool InRange { get; internal set; }
     /// <summary>An enemy is inside the inner radius: the regiment stops marching and is pushed / pushes.</summary>
     public bool InContact { get; internal set; }
+
+    /// <summary>Game time (TickManager.GameTime) until which this regiment counts as the PUSHER of a collision:
+    /// it keeps marching (slowly) and shoves the weaker enemy in front of it.</summary>
+    internal double PushingUntil;
 
     /// <summary>HP lost that did not yet cost a full manpower.</summary>
     public double LostHp { get; internal set; }
@@ -134,11 +141,13 @@ public sealed class Regiment
         TargetProvince = null;
         CurrentProvince = null;
         View = null;
+        ViewBehind = false;
         MergeTarget = null;
         Role = ColumnRole.None;
         IsColumn = false;
         LostHp = 0.0;
         InRange = InContact = false;
+        PushingUntil = 0.0;
         State = RegimentState.Idle;
         Manpower = 0.0;
         MovingIndex = -1;
@@ -188,6 +197,7 @@ public sealed class Regiment
         _path.Add(target);
         _pathIndex = 0;
         InRange = InContact = false;
+        PushingUntil = 0.0;
         State = RegimentState.Retreating;
         TargetProvince = target;
         _targetWorldPos = targetWorldPosition;

@@ -1314,7 +1314,7 @@ MonoBehaviour:
     diceRollDays: 7
     diceBuffDays: 6
     pushStartShare: 0.5
-    pushFullShare: 0.9
+    pushFullShare: 0.75
     occupyDays: 3
     defendDivisor: 1
     reinforcements: 1
