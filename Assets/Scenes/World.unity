@@ -1268,6 +1268,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1765447975}
   - component: {fileID: 1765447976}
+  - component: {fileID: 1765447977}
   m_Layer: 0
   m_Name: Combat
   m_TagString: Untagged
@@ -1304,6 +1305,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   settings:
     combatInterval: 0.1
+    autoMinRadius: 1
     damageScale: 0.01
     useDice: 1
     diceBonus:
@@ -1315,7 +1317,8 @@ MonoBehaviour:
     diceBuffDays: 6
     pushStartShare: 0.5
     pushFullShare: 0.75
-    pusherAdvances: 1
+    pushSpeedFactor: 0.3
+    winnersFollow: 1
     occupyDays: 3
     defendDivisor: 1
     occupyOnPath: 1
@@ -1349,8 +1352,30 @@ MonoBehaviour:
     units: 0
     inRange: 0
     inContact: 0
+    battles: 0
     sieges: 0
   siegesView: []
+--- !u!114 &1765447977
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1765447974}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9e4ede4e93e5e7347b9e123eab3bf85d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  width: 256
+  height: 44
+  offsetY: 0
+  minScale: 0.7
+  maxScale: 1.2
+  menPerNumber: 1000
+  endGrace: 0.75
+  maxViews: 64
+  rebuildInterval: 0.05
 --- !u!1 &1905439402
 GameObject:
   m_ObjectHideFlags: 0
@@ -1670,15 +1695,18 @@ MonoBehaviour:
   chargeTreasury: 1
   moveSpeedTiles: 4
   reinforceSpeedTiles: 6
-  pushAdvanceFactor: 0.5
   allowSeaMovement: 1
   seaSpeedFactor: 0.5
   seaRangeTiles: 100
   maxSeaNodes: 2500
+  referenceVisibleTiles: 120
+  minCardScale: 0.5
+  maxCardScale: 1.25
+  columnScale: 0.8
+  hideTextBelowScale: 0.6
   pileOffset: 0.22
   pileMaxDepth: 4
   viewCamera: {fileID: 0}
-  textMaxVisibleTiles: 200
   markerMaxVisibleTiles: 600
   visualRefreshInterval: 1
   debugNation: -1

@@ -626,6 +626,7 @@ public class ArmyManager : TickBehaviour
     }
 
     internal void MarkPreparationDirty() => _prepDirty = true;
+    internal void MarkVisualDirty() => _lodDirty = true;
 
     internal void RaiseCreated(Regiment r)
     {
@@ -1055,7 +1056,7 @@ public class ArmyManager : TickBehaviour
                 for (int j = 0; j < regs.Count; j++)
                 {
                     Regiment r = regs[j];
-                    if (!visible) { if (r.View != null) ReleaseView(r); continue; }
+                    if (!visible || r.InRange) { if (r.View != null) ReleaseView(r); continue; }   // in battle: only the Combat View is shown
                     _proj.Set(_vis.Count, r.WorldPosition);
                     _vis.Add(r);
                 }
@@ -1070,6 +1071,7 @@ public class ArmyManager : TickBehaviour
             Regiment r = _vis[i];
             if (!_proj.IsVisible(i)) { if (r.View != null) ReleaseView(r); continue; }
             if (r.View == null && !AcquireView(r)) continue;
+
 
             Vector2 sp = _proj.Screen(i);
             Vector2 local;

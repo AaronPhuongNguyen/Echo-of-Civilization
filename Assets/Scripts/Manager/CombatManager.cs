@@ -407,16 +407,19 @@ public class CombatManager : TickBehaviour
         float dt = _pendingDt;
 
         // pass 1: flags
-        bool any = false;
+        bool any = false, changed = false;
         for (int i = 0; i < n; i++)
         {
             Regiment r = _units[i];
             if (r.Military == null) continue;
             byte f = _batch.Flags(i);
-            r.InRange = (f & CombatBatch.FlagInRange) != 0;
+            bool inRange = (f & CombatBatch.FlagInRange) != 0;
+            if (inRange != r.InRange) changed = true;
+            r.InRange = inRange;
             r.InContact = (f & CombatBatch.FlagInContact) != 0;
             if (r.InRange) any = true;
         }
+        if (changed) army.MarkVisualDirty();
 
         // pass 2: battles (clusters) + push, before damage can remove regiments
         if (any) BuildBattles(n, dt, army); else _clusterCount = 0;
@@ -489,64 +492,9 @@ public class CombatManager : TickBehaviour
             }
             _clusters[c].Add(r);
         }
-
-        float march = army.moveSpeedTiles * army.TileSize;
-        for (int c = 0; c < _clusterCount; c++) ApplyPush(_clusters[c], dt, march);
     }
 
-    /// <summary>The stronger side of a battle shoves the weaker side's units that are in contact; marching winners follow.</summary>
-    private void ApplyPush(List<Regiment> list, float dt, float march)
-    {
-        if (list.Count < 2 || settings.pushSpeedFactor <= 0f) return;
-
-        Regiment big = null; double bm = -1.0;
-        for (int i = 0; i < list.Count; i++)
-        {
-            Regiment r = list[i];
-            if (r.Military != null && r.Manpower > bm) { bm = r.Manpower; big = r; }
-        }
-        if (big == null) return;
-        Nation anchor = big.Military.Nation;
-
-        float sA = 0f, sB = 0f, wA = 0f, wB = 0f;
-        Vector3 cA = Vector3.zero, cB = Vector3.zero;
-        for (int i = 0; i < list.Count; i++)
-        {
-            Regiment r = list[i];
-            if (r.Military == null) continue;
-            Nation rn = r.Military.Nation;
-            float w = (float)r.Manpower;
-            float str = w * (r.Military.AttackPerMan.Value + r.Military.DefendPerMan.Value);
-            if (rn != anchor && Hostile(anchor, rn)) { sB += str; wB += w; cB += r.WorldPosition * w; }
-            else { sA += str; wA += w; cA += r.WorldPosition * w; }
-        }
-        if (wA <= 0f || wB <= 0f || sA + sB <= 0f) return;
-        cA /= wA; cB /= wB;
-
-        float share = sA / (sA + sB);
-        bool aWins = share >= 0.5f;
-        float strong = Mathf.Max(share, 1f - share);
-        float span = Mathf.Max(0.01f, settings.pushFullShare - settings.pushStartShare);
-        float t = Mathf.Clamp01((strong - settings.pushStartShare) / span);
-        if (t <= 0.001f) return;
-
-        Vector3 dir = aWins ? cB - cA : cA - cB;
-        if (dir.sqrMagnitude < 1e-8f) return;
-        dir.Normalize();
-        Vector3 delta = dir * (t * march * settings.pushSpeedFactor * dt);
-
-        ArmyManager army = ArmyManager.Instance;
-        for (int i = 0; i < list.Count; i++)
-        {
-            Regiment r = list[i];
-            if (r.Military == null || !r.InContact) continue;
-            Nation rn = r.Military.Nation;
-            bool sideB = rn != anchor && Hostile(anchor, rn);
-            bool loser = aWins ? sideB : !sideB;
-            if (loser) army.Nudge(r, delta);
-            else if (settings.winnersFollow && r.State == RegimentState.Moving) army.Nudge(r, delta);
-        }
-    }
+    
 
     #endregion
 
