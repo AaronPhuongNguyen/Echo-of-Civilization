@@ -1,184 +1,352 @@
-using System;
-using TMPro;
+﻿using System;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.UI;
 
-/// <summary>
-/// Battle card:  [Logo][Side A manpower] | [Logo][Side B manpower]   on a dark background.
-/// Numbers are shown in full ("300.000") and count smoothly towards the real value
-/// (300.000 -> 299.999 -> 299.998 ...), following game speed and pause.
-/// </summary>
-public class BattleView : MonoBehaviour, IPoolable
+// ─────────────────────────────────────────────────────────────────────────────
+//  ARMY JOBS  (Burst-compiled, run on worker threads)
+//   ProjectionBatch : world -> screen for every regiment card in one parallel job.
+//   CombatBatch     : radius based combat (damage + dice + push) for every regiment in one parallel job.
+//  Managers never touch Unity.Mathematics types: they use these two small wrappers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#region Helpers
+
+internal static class JobUtil
 {
-    private Image _bg, _divider, _logoA, _logoB;
-    private TextMeshProUGUI _textA, _textB;
-    private bool _built;
+    public static NativeArray<T> Alloc<T>(int n) where T : struct =>
+        new NativeArray<T>(n, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
 
-    // real value (target), shown value (animated), speed (men per game-second)
-    private double _tA, _tB, _sA, _sB, _rA, _rB;
-    private long _dispA = long.MinValue, _dispB = long.MinValue;
-
-    public void OnSpawn() { }
-    public void OnDespawn() { }
-
-    internal void Bind(Battle b, CombatManager cm, ArmyManager army)
+    public static void Free<T>(ref NativeArray<T> a) where T : struct
     {
-        Build(cm, army);
-
-        _bg.sprite = cm.BackgroundSprite;
-        _bg.type = cm.BackgroundSprite != null && cm.BackgroundSprite.border.sqrMagnitude > 0f ? Image.Type.Sliced : Image.Type.Simple;
-
-        _logoA.sprite = cm.AttackLogo; _logoA.color = b.ColorA;
-        _logoB.sprite = cm.DefendLogo; _logoB.color = b.ColorB;
-
-        // start exactly at the real value (no animation from an old pooled number)
-        _tA = _sA = b.ManpowerA; _tB = _sB = b.ManpowerB;
-        _rA = _rB = 0.0;
-        _dispA = _dispB = long.MinValue;
-        ShowNumbers();
-    }
-
-    public void SetLocalPosition(Vector2 local) => ((RectTransform)transform).anchoredPosition = local;
-
-    /// <summary>Called once per combat tick with the real manpower. The card counts down to it over the next tick.</summary>
-    public void SetNumbers(double a, double b)
-    {
-        if (_textA == null) return;
-        float window = CombatManager.HasInstance ? Mathf.Max(0.02f, CombatManager.Instance.settings.stepInterval) * 0.95f : 0.095f;
-        _tA = a; _tB = b;
-        _rA = Math.Abs(_tA - _sA) / window;
-        _rB = Math.Abs(_tB - _sB) / window;
-    }
-
-    private void Update()
-    {
-        if (_textA == null) return;
-        if (_sA == _tA && _sB == _tB) return;
-
-        float dt = TickManager.Paused ? 0f : Time.unscaledDeltaTime * TickManager.GameSpeed;
-        if (dt <= 0f) return;
-
-        _sA = Step(_sA, _tA, _rA, dt);
-        _sB = Step(_sB, _tB, _rB, dt);
-        ShowNumbers();
-    }
-
-    private static double Step(double cur, double target, double rate, float dt)
-    {
-        double d = target - cur;
-        double max = rate * dt;
-        if (Math.Abs(d) <= max) return target;
-        return cur + Math.Sign(d) * max;
-    }
-
-    private void ShowNumbers()
-    {
-        long a = (long)Math.Round(_sA), b = (long)Math.Round(_sB);
-        if (a != _dispA) { _dispA = a; _textA.text = Dotted(a); }
-        if (b != _dispB) { _dispB = b; _textB.text = Dotted(b); }
-    }
-
-    /// <summary>300000 -> "300.000"</summary>
-    public static string Dotted(long v)
-    {
-        if (v < 0) v = 0;
-        string s = v.ToString();
-        if (s.Length <= 3) return s;
-        char[] r = new char[s.Length + (s.Length - 1) / 3];
-        int w = r.Length - 1, c = 0;
-        for (int i = s.Length - 1; i >= 0; i--)
-        {
-            if (c == 3) { r[w--] = '.'; c = 0; }
-            r[w--] = s[i];
-            c++;
-        }
-        return new string(r);
-    }
-
-    private void Build(CombatManager cm, ArmyManager army)
-    {
-        if (_built) return;
-        _built = true;
-
-        Vector2 rect = army.RegimentRect * cm.battleCardScale;
-        float h = rect.y;
-        float w = rect.x * 2f + h * 0.2f;
-        float pad = h * 0.12f;
-        float m = h - 2f * pad;
-
-        var root = (RectTransform)transform;
-        root.anchorMin = root.anchorMax = root.pivot = new Vector2(0.5f, 0.5f);
-        root.sizeDelta = new Vector2(w, h);
-        root.localScale = Vector3.one;
-
-        _bg = NewImage("Background", root);
-        _bg.color = new Color(0.08f, 0.08f, 0.08f, 0.88f);
-        Stretch(_bg.rectTransform);
-
-        _divider = NewImage("Divider", root);
-        _divider.color = new Color(1f, 1f, 1f, 0.85f);
-        RectTransform dv = _divider.rectTransform;
-        dv.anchorMin = dv.anchorMax = new Vector2(0.5f, 0.5f);
-        dv.pivot = new Vector2(0.5f, 0.5f);
-        dv.sizeDelta = new Vector2(Mathf.Max(2f, h * 0.04f), h * 0.8f);
-        dv.anchoredPosition = Vector2.zero;
-
-        _logoA = NewImage("LogoA", root);
-        Place(_logoA.rectTransform, 0f, pad, m);
-        _logoA.preserveAspect = true;
-        _textA = NewText("ManpowerA", root, 0f, 0.5f, pad * 2f + m, pad * 0.5f, pad, h);
-
-        _logoB = NewImage("LogoB", root);
-        Place(_logoB.rectTransform, 0.5f, pad, m);
-        _logoB.preserveAspect = true;
-        _textB = NewText("ManpowerB", root, 0.5f, 1f, pad * 2f + m, pad, pad, h);
-
-        if (army.FontAsset != null) { _textA.font = army.FontAsset; _textB.font = army.FontAsset; }
-    }
-
-    private static void Stretch(RectTransform rt)
-    {
-        rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
-        rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
-    }
-
-    private static void Place(RectTransform rt, float anchorX, float pad, float size)
-    {
-        rt.anchorMin = rt.anchorMax = new Vector2(anchorX, 0.5f);
-        rt.pivot = new Vector2(0f, 0.5f);
-        rt.anchoredPosition = new Vector2(pad, 0f);
-        rt.sizeDelta = new Vector2(size, size);
-    }
-
-    private static TextMeshProUGUI NewText(string name, RectTransform parent, float minX, float maxX,
-                                           float left, float right, float vert, float h)
-    {
-        var go = new GameObject(name, typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-        var t = go.AddComponent<TextMeshProUGUI>();
-        t.raycastTarget = false;
-        t.alignment = TextAlignmentOptions.Center;
-        t.overflowMode = TextOverflowModes.Overflow;
-        t.enableWordWrapping = false;
-        t.fontStyle = FontStyles.Bold;
-        // full numbers ("300.000") are wider than "300K": shrink to fit the half card
-        t.enableAutoSizing = true;
-        t.fontSizeMax = h * 0.45f;
-        t.fontSizeMin = h * 0.12f;
-        t.fontSize = h * 0.45f;
-        t.color = Color.white;
-        RectTransform rt = t.rectTransform;
-        rt.anchorMin = new Vector2(minX, 0f); rt.anchorMax = new Vector2(maxX, 1f);
-        rt.offsetMin = new Vector2(left, vert); rt.offsetMax = new Vector2(-right, -vert);
-        return t;
-    }
-
-    private static Image NewImage(string name, RectTransform parent)
-    {
-        var go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-        go.transform.SetParent(parent, false);
-        Image img = go.GetComponent<Image>();
-        img.raycastTarget = false;
-        return img;
+        if (a.IsCreated) a.Dispose();
     }
 }
+
+#endregion
+
+#region Projection (world -> screen)
+
+public sealed class ProjectionBatch : IDisposable
+{
+    private NativeArray<float3> _pos;
+    private NativeArray<float2> _screen;
+    private NativeArray<byte> _visible;
+    private int _cap;
+
+    public void Reserve(int n)
+    {
+        if (n <= _cap) return;
+        Dispose();
+        _cap = Mathf.Max(128, Mathf.NextPowerOfTwo(n));
+        _pos = JobUtil.Alloc<float3>(_cap);
+        _screen = JobUtil.Alloc<float2>(_cap);
+        _visible = JobUtil.Alloc<byte>(_cap);
+    }
+
+    public void Set(int i, Vector3 world) => _pos[i] = world;
+
+    /// <summary>Projects 'count' positions. Visible = inside the screen enlarged by 10%.</summary>
+    public void Run(Camera cam, int count, int screenW, int screenH)
+    {
+        if (count <= 0) return;
+        Matrix4x4 m = cam.projectionMatrix * cam.worldToCameraMatrix;
+        var job = new ProjectJob
+        {
+            pos = _pos,
+            screenPos = _screen,
+            visible = _visible,
+            viewProj = new float4x4(m.GetColumn(0), m.GetColumn(1), m.GetColumn(2), m.GetColumn(3)),
+            screen = new float2(screenW, screenH)
+        };
+        job.Schedule(count, 64).Complete();
+    }
+
+    public bool IsVisible(int i) => _visible[i] != 0;
+    public Vector2 Screen(int i) => (Vector2)(float2)_screen[i];
+
+    public void Dispose()
+    {
+        JobUtil.Free(ref _pos);
+        JobUtil.Free(ref _screen);
+        JobUtil.Free(ref _visible);
+        _cap = 0;
+    }
+
+    [BurstCompile]
+    private struct ProjectJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<float3> pos;
+        [WriteOnly] public NativeArray<float2> screenPos;
+        [WriteOnly] public NativeArray<byte> visible;
+        public float4x4 viewProj;
+        public float2 screen;
+
+        public void Execute(int i)
+        {
+            float4 c = math.mul(viewProj, new float4(pos[i], 1f));
+            if (c.w <= 1e-5f) { visible[i] = 0; screenPos[i] = float2.zero; return; }
+
+            float2 ndc = c.xy / c.w;
+            float2 sp = (ndc * 0.5f + 0.5f) * screen;
+            screenPos[i] = sp;
+
+            float2 margin = screen * 0.1f;
+            bool inside = sp.x >= -margin.x && sp.x <= screen.x + margin.x &&
+                          sp.y >= -margin.y && sp.y <= screen.y + margin.y;
+            visible[i] = (byte)(inside ? 1 : 0);
+        }
+    }
+}
+
+#endregion
+
+#region Combat
+
+/// <summary>
+/// One combat step for all regiments at once.
+///   outer radius : two hostile regiments inside it (min of both radii) hurt each other.
+///   inner radius : they collide: marching stops and the stronger side pushes the weaker back.
+///   dice         : stateless. Every pair re-rolls every 'rollDays' (own phase per pair); the winner side gets
+///                  ATK and DEF * (1 + bonus) for 'buffDays'. No other bonus exists.
+///   damage       : eff = ATK^2 / (ATK + DEF), hp = eff * damageScale * damageMultiplier * dt
+///   push         : stronger share (0.5..1) maps to 0..march speed (pushStart..pushFull).
+/// </summary>
+public sealed class CombatBatch : IDisposable
+{
+    public const byte FlagInRange = 1, FlagInContact = 2;
+
+    private NativeArray<float3> _pos, _outPush, _outTarget;
+    private NativeArray<float> _men, _atk, _def, _dmg, _outer, _inner, _outHp;
+    private NativeArray<int> _nation, _uid;
+    private NativeArray<byte> _hostile, _outFlags;
+    private int _cap, _nationCap;
+    private JobHandle _handle;
+
+    public bool Pending { get; private set; }
+    public int NationCap => _nationCap;
+
+    public void Reserve(int n, int nationCap)
+    {
+        Complete();
+        nationCap = Mathf.Max(1, nationCap);
+        if (n > _cap)
+        {
+            FreeUnits();
+            _cap = Mathf.Max(256, Mathf.NextPowerOfTwo(n));
+            _pos = JobUtil.Alloc<float3>(_cap); _outPush = JobUtil.Alloc<float3>(_cap); _outTarget = JobUtil.Alloc<float3>(_cap);
+            _men = JobUtil.Alloc<float>(_cap); _atk = JobUtil.Alloc<float>(_cap); _def = JobUtil.Alloc<float>(_cap);
+            _dmg = JobUtil.Alloc<float>(_cap); _outer = JobUtil.Alloc<float>(_cap); _inner = JobUtil.Alloc<float>(_cap);
+            _outHp = JobUtil.Alloc<float>(_cap);
+            _nation = JobUtil.Alloc<int>(_cap); _uid = JobUtil.Alloc<int>(_cap);
+            _outFlags = JobUtil.Alloc<byte>(_cap);
+        }
+        if (nationCap != _nationCap || !_hostile.IsCreated)
+        {
+            JobUtil.Free(ref _hostile);
+            _nationCap = nationCap;
+            _hostile = JobUtil.Alloc<byte>(nationCap * nationCap);
+        }
+    }
+
+    public void ClearHostility()
+    {
+        for (int i = 0; i < _hostile.Length; i++) _hostile[i] = 0;
+    }
+
+    public void SetHostile(int a, int b)
+    {
+        if (a < 0 || b < 0 || a >= _nationCap || b >= _nationCap) return;
+        _hostile[a * _nationCap + b] = 1;
+        _hostile[b * _nationCap + a] = 1;
+    }
+
+    /// <summary>nation = -1 excludes the regiment from combat.</summary>
+    public void Set(int i, Vector3 pos, float men, float atk, float def, float dmgMul, float outer, float inner, int nation, int uid)
+    {
+        _pos[i] = pos; _men[i] = men; _atk[i] = atk; _def[i] = def; _dmg[i] = dmgMul;
+        _outer[i] = outer; _inner[i] = inner; _nation[i] = nation; _uid[i] = uid;
+    }
+
+    public void Schedule(int count, int day, float dt, float damageScale, bool useDice, float diceBonus,
+                         int rollDays, int buffDays, float march, float pushStart, float pushFull)
+    {
+        if (count <= 0 || Pending) return;
+        var job = new CombatJob
+        {
+            pos = _pos,
+            men = _men,
+            atk = _atk,
+            def = _def,
+            dmg = _dmg,
+            outer = _outer,
+            inner = _inner,
+            nation = _nation,
+            uid = _uid,
+            hostile = _hostile,
+            outHp = _outHp,
+            outFlags = _outFlags,
+            outPush = _outPush,
+            outTarget = _outTarget,
+            count = count,
+            nationCap = _nationCap,
+            day = day,
+            dt = dt,
+            damageScale = damageScale,
+            useDice = useDice ? 1 : 0,
+            diceBonus = diceBonus,
+            rollDays = Mathf.Max(1, rollDays),
+            buffDays = Mathf.Max(0, buffDays),
+            march = march,
+            pushStart = pushStart,
+            pushFull = pushFull
+        };
+        _handle = job.Schedule(count, 8);
+        Pending = true;
+        JobHandle.ScheduleBatchedJobs();      // start the workers now, the result is collected in LateUpdate
+    }
+
+    public void Complete()
+    {
+        if (!Pending) return;
+        _handle.Complete();
+        Pending = false;
+    }
+
+    public float Hp(int i) => _outHp[i];
+    public byte Flags(int i) => _outFlags[i];
+    public Vector3 Push(int i) => _outPush[i];
+    public Vector3 Target(int i) => _outTarget[i];
+
+    private void FreeUnits()
+    {
+        JobUtil.Free(ref _pos); JobUtil.Free(ref _outPush); JobUtil.Free(ref _outTarget);
+        JobUtil.Free(ref _men); JobUtil.Free(ref _atk); JobUtil.Free(ref _def);
+        JobUtil.Free(ref _dmg); JobUtil.Free(ref _outer); JobUtil.Free(ref _inner);
+        JobUtil.Free(ref _outHp);
+        JobUtil.Free(ref _nation); JobUtil.Free(ref _uid);
+        JobUtil.Free(ref _outFlags);
+        _cap = 0;
+    }
+
+    public void Dispose()
+    {
+        Complete();
+        FreeUnits();
+        JobUtil.Free(ref _hostile);
+        _nationCap = 0;
+    }
+
+    [BurstCompile]
+    private struct CombatJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<float3> pos;
+        [ReadOnly] public NativeArray<float> men, atk, def, dmg, outer, inner;
+        [ReadOnly] public NativeArray<int> nation, uid;
+        [ReadOnly] public NativeArray<byte> hostile;
+        [WriteOnly] public NativeArray<float> outHp;
+        [WriteOnly] public NativeArray<byte> outFlags;
+        [WriteOnly] public NativeArray<float3> outPush, outTarget;
+
+        public int count, nationCap, day, useDice, rollDays, buffDays;
+        public float dt, damageScale, diceBonus, march, pushStart, pushFull;
+
+        private static uint Hash(uint a, uint b)
+        {
+            uint h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA6Bu;
+            h ^= h >> 15; h *= 0x2C1B3C6Du;
+            h ^= h >> 12; h *= 0x297A2D39u;
+            h ^= h >> 15;
+            return h;
+        }
+
+        public void Execute(int i)
+        {
+            int ni = nation[i];
+            if (ni < 0)
+            {
+                outHp[i] = 0f; outFlags[i] = 0; outPush[i] = float3.zero; outTarget[i] = float3.zero;
+                return;
+            }
+
+            float3 pi = pos[i];
+            float menI = men[i], atkI = atk[i], defI = def[i];
+            uint uidI = (uint)uid[i];
+            int row = ni * nationCap;
+            float invSpan = 1f / math.max(0.0001f, pushFull - pushStart);
+
+            float hp = 0f;
+            int flags = 0;
+            float3 push = float3.zero;
+            float3 target = pi;
+            float best = float.MaxValue;
+
+            for (int j = 0; j < count; j++)
+            {
+                if (j == i) continue;
+                int nj = nation[j];
+                if (nj < 0 || hostile[row + nj] == 0) continue;
+
+                float3 d = pi - pos[j];
+                float d2 = math.lengthsq(d);
+                float rOut = math.min(outer[i], outer[j]);
+                if (d2 > rOut * rOut) continue;
+
+                flags |= 1;
+                if (d2 < best) { best = d2; target = pos[j]; }
+
+                // ── dice: the ONLY modifier. Stateless: derived from the pair ids and the date ──
+                float mi = 1f, mj = 1f;
+                if (useDice != 0)
+                {
+                    uint uidJ = (uint)uid[j];
+                    uint lo = math.min(uidI, uidJ), hi = math.max(uidI, uidJ);
+                    uint h = Hash(lo, hi);
+                    int shifted = day + (int)(h % (uint)rollDays);
+                    int epoch = shifted / rollDays;
+                    int phase = shifted - epoch * rollDays;
+                    if (phase < buffDays)
+                    {
+                        bool loBuffed = (Hash(h, (uint)epoch) & 1u) == 0u;
+                        bool iIsLo = uidI < uidJ;
+                        if (iIsLo == loBuffed) mi += diceBonus; else mj += diceBonus;
+                    }
+                }
+
+                // ── damage from j to i ──
+                float atkJ = men[j] * atk[j] * mj;
+                float defIt = menI * defI * mi;
+                float eff = atkJ > 0f ? atkJ * atkJ / (atkJ + defIt) : 0f;
+                hp += eff * damageScale * dmg[j] * dt;
+
+                // ── collision: stronger pushes the weaker back, at most the march speed ──
+                float rIn = math.min(inner[i], inner[j]);
+                if (d2 <= rIn * rIn)
+                {
+                    flags |= 2;
+                    float si = menI * (atkI + defI) * mi;
+                    float sj = men[j] * (atk[j] + def[j]) * mj;
+                    float sum = si + sj;
+                    float share = sum > 0f ? si / sum : 0.5f;
+                    float strong = math.max(share, 1f - share);
+                    float t = math.saturate((strong - pushStart) * invSpan);
+                    float3 dir = math.normalizesafe(d, new float3(1f, 0f, 0f));
+                    if (share < 0.5f) push += dir * (t * march);    // weaker: pushed away
+                    else push -= dir * (t * march);                 // stronger: follows the enemy
+                }
+            }
+
+            float len = math.length(push);
+            if (len > march && len > 0f) push *= march / len;
+
+            outHp[i] = hp;
+            outFlags[i] = (byte)flags;
+            outPush[i] = push;
+            outTarget[i] = target;
+        }
+    }
+}
+
+#endregion

@@ -3,9 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DATA   (Province / Nation classes now live in WorldManager.cs)
-// ─────────────────────────────────────────────────────────────────────────────
+#region Data types
 
 /// <summary>Add Dirt, Sand, Mountain... here later. Colors are resolved in MapManager.TileColor().</summary>
 public enum TileType : byte { Water = 0, Land = 1 }
@@ -58,6 +56,14 @@ public class MapSettings
     public int provinceMaxDivisor = 40;
     public int minTilesPerProvince = 5;
 
+    [Header("Sea blocks (water tiles grouped into big regions, like provinces)")]
+    [Tooltip("Average tiles per sea block. Bigger = fewer blocks = cheaper sea logic.")]
+    public int seaTilesPerBlock = 6000;
+    [Tooltip("Connected water bodies smaller than this many tiles are flagged as lakes.")]
+    public int lakeMaxTiles = 20000;
+    [Tooltip("Alpha of the faint line between two sea blocks in detail chunks (0 = hidden).")]
+    [Range(0f, 1f)] public float seaBorderAlpha = 0.12f;
+
     [Header("Province stats (random range per province)")]
     public Vector2 taxRange = new Vector2(0.1f, 1.1f);
     public Vector2 economyRange = new Vector2(0.05f, 0.5f);
@@ -82,7 +88,7 @@ public class MapSettings
     [Range(0f, 1f)] public float minIslandNationFactor = 0.4f;
 
     [Header("Rendering")]
-    public Color waterColor = new Color(0.12f, 0.32f, 0.58f); 
+    public Color waterColor = new Color(0.12f, 0.32f, 0.58f);
     public Color neutralColor = new Color(0.6f, 0.6f, 0.6f);
     public Color borderColor = Color.black;
     [Range(0f, 1f)] public float provinceBorderAlpha = 0.35f;
@@ -95,43 +101,58 @@ public class MapSettings
     public int chunkSize = 128;
     public int maxDetailChunks = 9;
     public int overviewMaxSize = 1024;
+    [Tooltip("Max chunk builds / refreshes per frame (shared by camera moves and ownership changes).")]
     public int chunkBuildsPerFrame = 2;
     public int maxPooledChunks = 6;
     public bool generateOnBackgroundThread = true;
+    [Tooltip("Height-map rows are computed on several CPU cores.")]
+    public bool parallelGeneration = true;
 
     public MapSettings Clone() => (MapSettings)MemberwiseClone();
 }
+
+/// <summary>
+/// A BLOCK of water tiles (an ocean piece, a sea or a lake). Works like a province but at sea:
+/// run your naval / sea logic on these (a few hundred blocks) instead of on millions of water tiles.
+/// </summary>
+public class SeaRegion
+{
+    public int Id;
+    public string Name = "";
+    public int[] Tiles = Array.Empty<int>();                 // tile indices (y * width + x)
+    public int TileCount => Tiles.Length;
+    public Vector2 Centroid;                                 // tile coordinates
+    public Vector2Int Min, Max;                              // tile bounding box (inclusive)
+    public int[] Neighbors = Array.Empty<int>();             // ids of sea blocks sharing a water border
+    public int[] LandNeighbors = Array.Empty<int>();         // ids of provinces touching this block (its coast)
+    public bool IsLake;                                      // part of a small, enclosed water body
+    public bool IsCoastal => LandNeighbors.Length > 0;
+}
+
+#endregion
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  MAP MANAGER
 //
 //  Memory/CPU design for 500x500 .. 2048x2048 on phones:
-//   - generation runs on a background thread, uses flat arrays only (no per-tile objects)
-//   - provinces store exact int[] tile lists; world height uses a ushort histogram (no sort)
-//   - rendering = 1 low-res OVERVIEW texture (always on) + DETAIL CHUNKS that exist only
-//     for the part the camera sees. Chunk textures are rebuilt from data, pooled and reused.
+//   - generation (including the overview pixels) runs on a background thread, flat arrays only
+//   - provinces AND sea blocks store exact int[] tile lists; height uses a ushort histogram (no sort)
+//   - rendering = 1 low-res OVERVIEW texture + DETAIL CHUNKS only for what the camera sees
+//   - every visual change is batched: ONE overview upload and a budgeted number of chunk refreshes per frame
 //   - nations are stored in WorldManager (registered on the main thread after generation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 public class MapManager : MonoBehaviour
 {
+    #region Inspector & events
+
     public MapSettings settings = new MapSettings();
     [SerializeField] private bool generateOnStart = true;
     [Tooltip("Only used to decide which detail chunks are visible. Defaults to Camera.main.")]
     [SerializeField] private Camera viewCamera;
 
-    public event Action OnMapGenerated;
-    public event Action<Province, int, int> OnProvinceOwnerChanged;   // province, oldNationId, newNationId
-
     [Header("Province merging")]
     public MergeSettings merge = new MergeSettings();
-    public string LastMergeError { get; private set; }
-
-    /// <summary>origin (the leader: its name is kept by default), absorbed provinces.</summary>
-    public event Action<Province, IReadOnlyList<Province>> OnProvincesMerged;
-
-    public bool IsGenerating { get; private set; }
-    public bool IsReady { get; private set; }
 
     [Header("Capital marker")]
     [Tooltip("Prefab with a SpriteRenderer (white star). Tinted with the inverse nation color.")]
@@ -142,68 +163,65 @@ public class MapManager : MonoBehaviour
     [SerializeField] private float markerMinTiles = 3f;
     [SerializeField] private int markerSortingOrder = 10;
 
-    private Transform _markerRoot;
-    private readonly Dictionary<int, GameObject> _markers = new Dictionary<int, GameObject>();
+    public event Action OnMapGenerated;
+    public event Action<Province, int, int> OnProvinceOwnerChanged;   // province, oldNationId, newNationId
+    /// <summary>origin (the leader: its name is kept by default), absorbed provinces.</summary>
+    public event Action<Province, IReadOnlyList<Province>> OnProvincesMerged;
 
-    // ── data ──
+    public string LastMergeError { get; private set; }
+    public bool IsGenerating { get; private set; }
+    public bool IsReady { get; private set; }
+
+    #endregion
+
+    #region Data
+
     private MapSettings _s = new MapSettings();               // snapshot used during/after generation
     private int _w, _h;
     private TileType[] _tiles;
     private int[] _tileProvince;                              // province id per tile, -1 = water
+    private int[] _tileSea;                                   // sea block id per tile, -1 = land
     private int[] _landIdx;                                   // indices of all land tiles
+    private int[] _ownerKey;                                  // nation id per province (fast copy of OwnerNationId)
+    private int[][] _coastSeas;                               // sea block ids touching each province
     private readonly List<Province> _provinces = new List<Province>();
+    private readonly List<SeaRegion> _seas = new List<SeaRegion>();
     private WorldManager _world;                              // owns the nations
-    private int[] _pendingOwner;                              // generation result: region index per province
-    private Color[] _pendingColors;                           // generation result: color per region
-    private int[] _pendingCapital;
-    private string[] _pendingNames;                             // generation result: capital province id per region
     private Unity.Mathematics.Random _rng;                    // local generator (thread-safe, seeded from RNG.Seed)
     private bool _destroyed;
 
+    // generation results handed to the main thread
+    private int[] _pendingOwner;                              // region index per province
+    private Color[] _pendingColors;                           // color per region
+    private int[] _pendingCapital;                            // capital province id per region
+    private string[] _pendingNames;                           // name per region
+
     public int Width => _w;
     public int Height => _h;
+    public IReadOnlyList<Province> Provinces => _provinces;
+    public IReadOnlyList<SeaRegion> Seas => _seas;
+    public IReadOnlyList<Nation> Nations => _world != null ? _world.Nations : null;
 
     /// <summary>Offset from this transform to the map's bottom-left corner (local space). Pivot = map center.</summary>
     private Vector3 PivotOffset => _s.pivotAtCenter
         ? new Vector3(-_w * _s.tileSize * 0.5f, -_h * _s.tileSize * 0.5f, 0f)
         : Vector3.zero;
-    public IReadOnlyList<Province> Provinces => _provinces;
-    public IReadOnlyList<Nation> Nations => _world != null ? _world.Nations : null;
 
-    // ── rendering ──
-    private class Chunk
-    {
-        public int cx, cy;
-        public GameObject go;
-        public Texture2D color, border;
-        public Sprite colorSprite, borderSprite;
-    }
-
-    private int _cs, _ppt, _provPx, _nationPx;
-    private byte _provAlpha, _nationAlpha;
-    private Color32 _borderRgb;
-
-    private GameObject _ovGo;
-    private Texture2D _ovTex;
-    private Sprite _ovSprite;
-    private Color32[] _ovPx;
-    private int _ovScale, _ovW, _ovH;
-
-    private Transform _chunkRoot;
-    private Chunk[] _chunks;
-    private int _ccx, _ccy;
-    private readonly Stack<Chunk> _pool = new Stack<Chunk>();
-    private Color32[] _chunkColorBuf;
-    private byte[] _chunkBorderBuf;
-
-    private Vector3 _lastCamPos;
-    private Quaternion _lastCamRot;
-    private float _lastZoom, _lastAspect;
-    private bool _chunkWorkPending;
+    #endregion
 
     #region Unity
+
     private void Start() { if (generateOnStart) Generate(); }
-    private void LateUpdate() { if (IsReady) UpdateChunkVisibility(); }
+
+    private void LateUpdate()
+    {
+        if (!IsReady) return;
+        int budget = Mathf.Max(1, _s.chunkBuildsPerFrame);   // one shared budget per frame
+        FlushVisuals(ref budget);
+        FlushMarkers();
+        UpdateChunkVisibility(ref budget);
+    }
+
     private void OnDestroy() { _destroyed = true; Clear(); }
 
     private void OnValidate()
@@ -213,6 +231,8 @@ public class MapManager : MonoBehaviour
         settings.tileSize = Mathf.Max(0.01f, settings.tileSize);
         settings.minProvinces = Mathf.Max(1, settings.minProvinces);
         settings.provinceMaxDivisor = Mathf.Max(1, settings.provinceMaxDivisor);
+        settings.seaTilesPerBlock = Mathf.Max(256, settings.seaTilesPerBlock);
+        settings.lakeMaxTiles = Mathf.Max(0, settings.lakeMaxTiles);
         settings.minNations = Mathf.Max(1, settings.minNations);
         settings.maxNations = Mathf.Max(settings.minNations, settings.maxNations);
         settings.chunkSize = Mathf.Clamp(settings.chunkSize, 32, 256);
@@ -226,11 +246,11 @@ public class MapManager : MonoBehaviour
     }
 
     private static Vector2 FixRange(Vector2 r) => new Vector2(r.x, Mathf.Max(r.x, r.y));
+
     #endregion
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  PUBLIC API
-    // ─────────────────────────────────────────────────────────────────────
+    #region Public API: generate / clear / ownership
+
     [ContextMenu("Generate Map")]
     public void Generate() { _ = GenerateAsync(); }
 
@@ -252,6 +272,7 @@ public class MapManager : MonoBehaviour
             _w = _s.width;
             _h = _s.height;
             _world = WorldManager.Instance;       // main thread: finds / creates the WorldManager
+            InitRenderParams();
 
             // Global RNG stays in sync for the rest of the game; map generation uses a local copy of it
             // so it can safely run on a background thread without touching the global state.
@@ -278,13 +299,20 @@ public class MapManager : MonoBehaviour
         DestroyMarkers();
         IsReady = false;
         _provinces.Clear();
+        _seas.Clear();
         _tiles = null;
         _tileProvince = null;
+        _tileSea = null;
         _landIdx = null;
+        _ownerKey = null;
+        _coastSeas = null;
         _pendingOwner = null;
         _pendingColors = null;
         _pendingCapital = null;
         _pendingNames = null;
+        _ovDirty = false;
+        _anyChunkDirty = false;
+        _chunkDirty = null;
         if (WorldManager.HasInstance) WorldManager.Instance.ClearNations();
 
         if (_chunks != null)
@@ -313,17 +341,25 @@ public class MapManager : MonoBehaviour
         if (old == nationId) return true;
 
         if (!_world.AssignProvince(p, target)) return false;
+        _ownerKey[provinceId] = nationId;
         UpdateProvinceColor(p);
-        RefreshProvinceVisuals(p);
-        RefreshCapitalMarkers();
+        MarkProvinceDirty(p);                 // repainted once, next frame
+        MarkMarkerDirty(old);
+        MarkMarkerDirty(nationId);
 
         OnProvinceOwnerChanged?.Invoke(p, old, nationId);
         return true;
     }
 
+    #endregion
+
+    #region Public API: queries
+
     public bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < _w && y < _h;
     public TileType GetTileType(int x, int y) => _tiles[y * _w + x];
     public bool IsLand(int x, int y) => InBounds(x, y) && _tiles[y * _w + x] == TileType.Land;
+    public bool IsWater(int x, int y) => InBounds(x, y) && _tiles[y * _w + x] == TileType.Water;
+
     public int GetProvinceId(int x, int y) => InBounds(x, y) ? _tileProvince[y * _w + x] : -1;
     public Province GetProvince(int id) => id >= 0 && id < _provinces.Count ? _provinces[id] : null;
     public Nation GetNation(int id) => _world != null ? _world.GetNation(id) : null;
@@ -333,6 +369,16 @@ public class MapManager : MonoBehaviour
         int p = GetProvinceId(x, y);
         return p < 0 ? -1 : _provinces[p].OwnerNationId;
     }
+
+    /// <summary>Sea block id of a water tile, -1 for land / out of bounds.</summary>
+    public int GetSeaId(int x, int y) => InBounds(x, y) ? _tileSea[y * _w + x] : -1;
+    public SeaRegion GetSea(int id) => id >= 0 && id < _seas.Count ? _seas[id] : null;
+
+    /// <summary>Sea blocks touching this province (empty = landlocked).</summary>
+    public IReadOnlyList<int> GetCoastalSeas(Province p) =>
+        p != null && _coastSeas != null && p.Id >= 0 && p.Id < _coastSeas.Length ? _coastSeas[p.Id] : Array.Empty<int>();
+
+    public bool IsCoastal(Province p) => GetCoastalSeas(p).Count > 0;
 
     public bool TryWorldToTile(Vector3 world, out int x, out int y)
     {
@@ -344,6 +390,7 @@ public class MapManager : MonoBehaviour
 
     public Vector3 TileToWorldCenter(int x, int y) =>
         transform.TransformPoint(new Vector3((x + 0.5f) * _s.tileSize, (y + 0.5f) * _s.tileSize, 0f) + PivotOffset);
+
     /// <summary>Local offset of the map's bottom-left corner (the overlay uses it).</summary>
     public Vector3 MapOrigin => PivotOffset;
 
@@ -363,16 +410,27 @@ public class MapManager : MonoBehaviour
 
     public Nation GetNationAt(Vector3 world) => GetProvinceAt(world)?.Owner;
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  GENERATION  (everything below until VISUALS may run on a background thread)
-    // ─────────────────────────────────────────────────────────────────────
+    public SeaRegion GetSeaAt(Vector3 world) =>
+        IsReady && TryWorldToTile(world, out int x, out int y) ? GetSea(GetSeaId(x, y)) : null;
+
+    #endregion
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  GENERATION  (everything in the next regions may run on a background thread)
+    // ═════════════════════════════════════════════════════════════════════
+
+    #region Generation: pipeline & RNG helpers
+
     private void GenerateData(uint seed)
     {
         _rng = new Unity.Mathematics.Random(HashSeed(seed));
         GenerateWorld();
         GenerateProvinces();
+        GenerateSeas();
+        GenerateAdjacency();
         GenerateNations();
         GenerateNames(seed);
+        PrepareVisuals();
     }
 
     private static uint HashSeed(uint s)
@@ -386,36 +444,65 @@ public class MapManager : MonoBehaviour
     }
 
     private static float Noise(float x, float y) => Unity.Mathematics.noise.snoise(new Unity.Mathematics.float2(x, y));
+    private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 
-    // ── WORLD: fractal simplex noise + edge falloff; exact land % via a 65536-bin histogram (no sorting) ──
+    private static void Fill(int[] a, int v) { for (int i = 0; i < a.Length; i++) a[i] = v; }
+
+    // one RNG call gives 16 "75% yes" decisions (2 bits each) -> far fewer RNG calls while growing regions
+    private uint _bits;
+    private int _bitsLeft;
+
+    private bool Coin75()
+    {
+        if (_bitsLeft == 0) { _bits = _rng.NextUInt(); _bitsLeft = 16; }
+        bool yes = (_bits & 3u) != 0u;
+        _bits >>= 2;
+        _bitsLeft--;
+        return yes;
+    }
+
+    private void RunRows(int rows, Action<int> body)
+    {
+        if (_s.parallelGeneration) Parallel.For(0, rows, body);
+        else for (int y = 0; y < rows; y++) body(y);
+    }
+
+    #endregion
+
+    #region Generation: world (continents, land / water)
+
+    // fractal simplex noise + edge falloff; exact land % via a 65536-bin histogram (no sorting)
     private void GenerateWorld()
     {
-        int n = _w * _h;
+        int w = _w, h = _h, n = w * h;
         var hmap = new ushort[n];
-        var hist = new int[65536];
-        float minSide = Mathf.Min(_w, _h);
+        float minSide = Mathf.Min(w, h);
 
         // 1) continent seeds: spread out (best-candidate), each one a rotated, stretched blob
         int cc = _rng.NextInt(Mathf.Max(1, _s.minContinents), Mathf.Max(_s.minContinents, _s.maxContinents) + 1);
-        var cx = new float[cc]; var cy = new float[cc]; var cr = new float[cc];
-        var cCos = new float[cc]; var cSin = new float[cc]; var cSx = new float[cc]; var cSy = new float[cc];
+        var cx = new float[cc]; var cy = new float[cc];
+        var a1 = new float[cc]; var a2 = new float[cc]; var b1 = new float[cc]; var b2 = new float[cc];
+        var invR2 = new float[cc];
         for (int i = 0; i < cc; i++)
         {
             float bx = 0f, by = 0f, bestD = -1f;
             for (int t = 0; t < 16; t++)
             {
-                float px = _rng.NextFloat(0.18f, 0.82f) * _w;
-                float py = _rng.NextFloat(0.18f, 0.82f) * _h;
+                float px = _rng.NextFloat(0.18f, 0.82f) * w;
+                float py = _rng.NextFloat(0.18f, 0.82f) * h;
                 float dmin = float.MaxValue;
                 for (int j = 0; j < i; j++) dmin = Mathf.Min(dmin, (px - cx[j]) * (px - cx[j]) + (py - cy[j]) * (py - cy[j]));
                 if (i == 0 || dmin > bestD) { bestD = dmin; bx = px; by = py; }
             }
             cx[i] = bx; cy[i] = by;
-            cr[i] = _s.continentRadius * minSide * _rng.NextFloat(0.7f, 1.3f);
+            float radius = _s.continentRadius * minSide * _rng.NextFloat(0.7f, 1.3f);
             float ang = _rng.NextFloat(0f, Mathf.PI);
-            cCos[i] = Mathf.Cos(ang); cSin[i] = Mathf.Sin(ang);
-            cSx[i] = _rng.NextFloat(0.75f, 1.4f);
-            cSy[i] = _rng.NextFloat(0.75f, 1.4f);
+            float cos = Mathf.Cos(ang), sin = Mathf.Sin(ang);
+            float sx = _rng.NextFloat(0.75f, 1.4f), sy = _rng.NextFloat(0.75f, 1.4f);
+            // pre-folded rotation + stretch: rx = dx*a1 + dy*a2, ry = dx*b1 + dy*b2
+            a1[i] = cos / sx; a2[i] = sin / sx;
+            b1[i] = -sin / sy; b2[i] = cos / sy;
+            invR2[i] = 1f / (radius * radius);
         }
 
         float ox = _rng.NextFloat(0f, 1000f), oy = _rng.NextFloat(0f, 1000f);
@@ -424,28 +511,48 @@ public class MapManager : MonoBehaviour
         float warpFreq = 1f / (minSide * 0.3f);
         float warpAmp = _s.coastWarp * minSide;
         float cw = Mathf.Clamp01(_s.continentWeight);
+        float persistence = _s.persistence, lacunarity = _s.lacunarity, edgeWater = _s.edgeWater;
         int octaves = Mathf.Max(1, _s.octaves);
 
-        for (int y = 0; y < _h; y++)
-        {
-            float dy = (y + 0.5f) / _h * 2f - 1f;
-            for (int x = 0; x < _w; x++)
+        // 2) domain warp is very low frequency: sample it on a coarse grid and interpolate (2 noise calls per 64 tiles)
+        const int Step = 8;
+        int gw = w / Step + 2, gh = h / Step + 2;
+        var warpX = new float[gw * gh];
+        var warpY = new float[gw * gh];
+        for (int gy = 0; gy < gh; gy++)
+            for (int gx = 0; gx < gw; gx++)
             {
-                // 2) domain warp: bends the continent shapes into natural, irregular outlines
-                float px = x + Noise(wox + x * warpFreq, woy + y * warpFreq) * warpAmp;
-                float py = y + Noise(wox + 500f + x * warpFreq, woy + 500f + y * warpFreq) * warpAmp;
+                float sx = gx * Step * warpFreq, sy = gy * Step * warpFreq;
+                warpX[gy * gw + gx] = Noise(wox + sx, woy + sy) * warpAmp;
+                warpY[gy * gw + gx] = Noise(wox + 500f + sx, woy + 500f + sy) * warpAmp;
+            }
 
-                // 3) continent mask: 1 in the core, 0 outside the (warped, stretched) radius
-                float mask = 0f;
+        void Row(int y)
+        {
+            int gy = y / Step;
+            float fy = (y - gy * Step) / (float)Step;
+            int g0 = gy * gw, g1 = g0 + gw;
+            float dy = (y + 0.5f) / h * 2f - 1f;
+
+            for (int x = 0; x < w; x++)
+            {
+                int gx = x / Step;
+                float fx = (x - gx * Step) / (float)Step;
+                float wx = Lerp(Lerp(warpX[g0 + gx], warpX[g0 + gx + 1], fx), Lerp(warpX[g1 + gx], warpX[g1 + gx + 1], fx), fy);
+                float wy = Lerp(Lerp(warpY[g0 + gx], warpY[g0 + gx + 1], fx), Lerp(warpY[g1 + gx], warpY[g1 + gx + 1], fx), fy);
+                float px = x + wx, py = y + wy;
+
+                // 3) continent mask: smallest normalized distance wins -> a single sqrt per tile
+                float best = float.MaxValue;
                 for (int c = 0; c < cc; c++)
                 {
                     float ddx = px - cx[c], ddy = py - cy[c];
-                    float rx = (ddx * cCos[c] + ddy * cSin[c]) / cSx[c];
-                    float ry = (-ddx * cSin[c] + ddy * cCos[c]) / cSy[c];
-                    float m = 1f - Mathf.Sqrt(rx * rx + ry * ry) / cr[c];
-                    if (m > mask) mask = m;
+                    float rx = ddx * a1[c] + ddy * a2[c];
+                    float ry = ddx * b1[c] + ddy * b2[c];
+                    float d2 = (rx * rx + ry * ry) * invR2[c];
+                    if (d2 < best) best = d2;
                 }
-                mask = Mathf.Clamp01(mask);
+                float mask = Mathf.Clamp01(1f - Mathf.Sqrt(best));
                 mask = mask * mask * (3f - 2f * mask);
 
                 // 4) fractal noise for coastline detail, bays and peninsulas
@@ -454,20 +561,23 @@ public class MapManager : MonoBehaviour
                 {
                     v += Noise(ox + x * f, oy + y * f) * amp;
                     total += amp;
-                    amp *= _s.persistence;
-                    f *= _s.lacunarity;
+                    amp *= persistence;
+                    f *= lacunarity;
                 }
                 v = v / total * 0.5f + 0.5f;
 
-                float dx = (x + 0.5f) / _w * 2f - 1f;
+                float dx = (x + 0.5f) / w * 2f - 1f;
                 float d = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));      // 0 center .. 1 edge
-                float h = mask * cw + v * (1f - cw) - _s.edgeWater * d * d;
+                float height = mask * cw + v * (1f - cw) - edgeWater * d * d;
 
-                int q = Mathf.Clamp((int)((h + 1f) * 0.5f * 65535f), 0, 65535);
-                hmap[y * _w + x] = (ushort)q;
-                hist[q]++;
+                hmap[y * w + x] = (ushort)Mathf.Clamp((int)((height + 1f) * 0.5f * 65535f), 0, 65535);
             }
         }
+        RunRows(h, Row);
+
+        // histogram (serial, trivial) -> exact land percentage
+        var hist = new int[65536];
+        for (int i = 0; i < n; i++) hist[hmap[i]]++;
 
         int landTarget = Mathf.Clamp(Mathf.RoundToInt(_s.landPercent * n), 0, n);
         int threshold = 65536, acc = 0;
@@ -481,48 +591,56 @@ public class MapManager : MonoBehaviour
         }
 
         _tiles = new TileType[n];
-        int land = 0;
         for (int i = 0; i < n; i++)
-        {
-            if (hmap[i] >= threshold) { _tiles[i] = TileType.Land; land++; }
-        }
+            if (hmap[i] >= threshold) _tiles[i] = TileType.Land;
 
         SmoothLand(_s.smoothingPasses);                               // round off jagged coasts
         FloodPass(TileType.Land, _s.minLandPatch, TileType.Water);    // remove tiny islands
         FloodPass(TileType.Water, _s.minWaterPatch, TileType.Land);   // fill tiny ponds (bigger ones stay as lakes/seas)
 
-        land = 0;
+        int land = 0;
         for (int i = 0; i < n; i++) if (_tiles[i] == TileType.Land) land++;
         _landIdx = new int[land];
         int k = 0;
         for (int i = 0; i < n; i++) if (_tiles[i] == TileType.Land) _landIdx[k++] = i;
     }
 
-    /// <summary>Majority filter (8 neighbours): >=5 land -> land, <=3 -> water. Smooths coasts, kills pixel noise.</summary>
+    /// <summary>Majority filter (8 neighbours): >=5 land -> land, <=3 -> water. Done as two cheap 3-tap passes.</summary>
     private void SmoothLand(int passes)
     {
-        int n = _w * _h;
+        if (passes <= 0) return;
+        int w = _w, h = _h, n = w * h;
         var src = _tiles;
         var dst = new TileType[n];
+        var rowSum = new byte[n];
+
         for (int pass = 0; pass < passes; pass++)
         {
-            for (int y = 0; y < _h; y++)
+            // horizontal: land count of (x-1, x, x+1)
+            for (int y = 0; y < h; y++)
             {
-                for (int x = 0; x < _w; x++)
+                int row = y * w;
+                for (int x = 0; x < w; x++)
                 {
-                    int cnt = 0;
-                    for (int oy = -1; oy <= 1; oy++)
-                    {
-                        int yy = y + oy;
-                        if (yy < 0 || yy >= _h) continue;
-                        for (int ox = -1; ox <= 1; ox++)
-                        {
-                            if (ox == 0 && oy == 0) continue;
-                            int xx = x + ox;
-                            if (xx >= 0 && xx < _w && src[yy * _w + xx] == TileType.Land) cnt++;
-                        }
-                    }
-                    int i = y * _w + x;
+                    int i = row + x;
+                    int v = src[i] == TileType.Land ? 1 : 0;
+                    if (x > 0 && src[i - 1] == TileType.Land) v++;
+                    if (x < w - 1 && src[i + 1] == TileType.Land) v++;
+                    rowSum[i] = (byte)v;
+                }
+            }
+            // vertical: 3x3 total minus the tile itself = 8-neighbour count
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    int i = row + x;
+                    int cnt = rowSum[i];
+                    if (y > 0) cnt += rowSum[i - w];
+                    if (y < h - 1) cnt += rowSum[i + w];
+                    bool self = src[i] == TileType.Land;
+                    if (self) cnt--;
                     dst[i] = cnt >= 5 ? TileType.Land : (cnt <= 3 ? TileType.Water : src[i]);
                 }
             }
@@ -567,72 +685,157 @@ public class MapManager : MonoBehaviour
         }
     }
 
-    // ── PROVINCES: count = random(minProvinces .. W*H/divisor); evenly scattered seeds + random region growth ──
-    private void GenerateProvinces()
-    {
-        int n = _w * _h;
-        int land = _landIdx.Length;
-        _tileProvince = new int[n];
-        for (int i = 0; i < n; i++) _tileProvince[i] = -1;
-        if (land == 0) return;
+    #endregion
 
-        int maxP = Mathf.Max(_s.minProvinces, n / Mathf.Max(1, _s.provinceMaxDivisor));
-        int target = _rng.NextInt(_s.minProvinces, maxP + 1);
-        target = Mathf.Clamp(target, 1, Mathf.Max(1, land / Mathf.Max(1, _s.minTilesPerProvince)));
+    #region Generation: region partitioning (shared by provinces and sea blocks)
+
+    /// <summary>
+    /// Splits the tiles of 'type' (listed in idx) into ~target regions and writes the region id of every tile into 'map'
+    /// (-1 elsewhere). Evenly scattered seeds + FIFO growth; disconnected landmasses / water bodies that got no seed
+    /// are split into ~(size / average region size) regions. Returns the region count.
+    /// </summary>
+    private int PartitionTiles(int[] idx, int[] map, TileType type, int target)
+    {
+        int n = _w * _h, count = idx.Length;
+        Fill(map, -1);
 
         var frontier = new Queue<int>(4096);
         int region = 0;
-        foreach (int s in ScatterSeeds(land, target))
+        foreach (int s in ScatterSeeds(idx, target))
         {
-            _tileProvince[s] = region++;
+            map[s] = region++;
             frontier.Enqueue(s);
         }
-        GrowTiles(frontier);
+        GrowTiles(map, type, frontier);
 
-        // Islands that got no seed: split each into ~(size / average province size) provinces.
-        float avg = (float)land / target;
+        float avg = (float)count / target;
         var comp = new List<int>();
         var stack = new List<int>();
-        void Mark(int t)
-        {
-            if (_tileProvince[t] == -1 && _tiles[t] == TileType.Land) { _tileProvince[t] = -2; stack.Add(t); }
-        }
 
-        for (int li = 0; li < land; li++)
+        for (int li = 0; li < count; li++)
         {
-            int s = _landIdx[li];
-            if (_tileProvince[s] != -1) continue;
+            int s = idx[li];
+            if (map[s] != -1) continue;
 
             comp.Clear(); stack.Clear();
-            _tileProvince[s] = -2; stack.Add(s);
+            map[s] = -2; stack.Add(s);
             while (stack.Count > 0)
             {
                 int c = stack[stack.Count - 1];
                 stack.RemoveAt(stack.Count - 1);
                 comp.Add(c);
                 int x = c % _w;
-                if (x > 0) Mark(c - 1);
-                if (x < _w - 1) Mark(c + 1);
-                if (c >= _w) Mark(c - _w);
-                if (c + _w < n) Mark(c + _w);
+                if (x > 0) MarkTemp(map, type, c - 1, stack);
+                if (x < _w - 1) MarkTemp(map, type, c + 1, stack);
+                if (c >= _w) MarkTemp(map, type, c - _w, stack);
+                if (c + _w < n) MarkTemp(map, type, c + _w, stack);
             }
 
             int kk = Mathf.Clamp(Mathf.RoundToInt(comp.Count / avg), 1, comp.Count);
             for (int tries = kk * 8, got = 0; got < kk && tries > 0; tries--)
             {
                 int pick = comp[_rng.NextInt(0, comp.Count)];
-                if (_tileProvince[pick] != -2) continue;
-                _tileProvince[pick] = region++;
+                if (map[pick] != -2) continue;
+                map[pick] = region++;
                 frontier.Enqueue(pick);
                 got++;
             }
-            // tiles stay -2 until all islands are processed so they are not detected twice
+            // tiles stay -2 until every component is processed so none is detected twice
         }
-        for (int li = 0; li < land; li++) if (_tileProvince[_landIdx[li]] == -2) _tileProvince[_landIdx[li]] = -1;
-        GrowTiles(frontier);
+        for (int li = 0; li < count; li++) if (map[idx[li]] == -2) map[idx[li]] = -1;
+        GrowTiles(map, type, frontier);
+        return region;
+    }
 
-        // build Province objects with exact-size tile arrays + random stats
-        int pc = region;
+    private void MarkTemp(int[] map, TileType type, int t, List<int> stack)
+    {
+        if (map[t] == -1 && _tiles[t] == type) { map[t] = -2; stack.Add(t); }
+    }
+
+    /// <summary>Dart-throwing with a spatial grid: tiles at least ~0.6*sqrt(area/count) apart.</summary>
+    private List<int> ScatterSeeds(int[] idx, int target)
+    {
+        int total = idx.Length;
+        float r = 0.6f * Mathf.Sqrt((float)total / target);
+        float r2 = r * r;
+        float cell = Mathf.Max(1f, r / 1.4142f);
+        int gw = (int)(_w / cell) + 1, gh = (int)(_h / cell) + 1;
+        var grid = new int[gw * gh];                      // stores tile+1, 0 = empty
+        var seeds = new List<int>(target);
+
+        for (int attempts = target * 40; seeds.Count < target && attempts > 0; attempts--)
+        {
+            int t = idx[_rng.NextInt(0, total)];
+            int x = t % _w, y = t / _w;
+            int gx = (int)(x / cell), gy = (int)(y / cell);
+
+            bool ok = true;
+            for (int yy = Mathf.Max(0, gy - 2); yy <= Mathf.Min(gh - 1, gy + 2) && ok; yy++)
+            {
+                for (int xx = Mathf.Max(0, gx - 2); xx <= Mathf.Min(gw - 1, gx + 2); xx++)
+                {
+                    int s = grid[yy * gw + xx] - 1;
+                    if (s < 0) continue;
+                    int dx = s % _w - x, dy = s / _w - y;
+                    if (dx * dx + dy * dy < r2) { ok = false; break; }
+                }
+            }
+            if (!ok) continue;
+            grid[gy * gw + gx] = t + 1;
+            seeds.Add(t);
+        }
+        if (seeds.Count == 0) seeds.Add(idx[_rng.NextInt(0, total)]);
+        return seeds;
+    }
+
+    /// <summary>
+    /// Even-speed growth (FIFO queue): all regions expand at the same pace, giving compact, rounded shapes.
+    /// Each free neighbour is claimed with 75% chance so the edges stay organic instead of diamond-shaped.
+    /// </summary>
+    private void GrowTiles(int[] map, TileType type, Queue<int> frontier)
+    {
+        int n = _w * _h;
+        while (frontier.Count > 0)
+        {
+            int node = frontier.Dequeue();
+            int id = map[node];
+            int x = node % _w;
+            bool left = false;
+            if (x > 0) left |= TryClaim(map, type, node - 1, id, frontier);
+            if (x < _w - 1) left |= TryClaim(map, type, node + 1, id, frontier);
+            if (node >= _w) left |= TryClaim(map, type, node - _w, id, frontier);
+            if (node + _w < n) left |= TryClaim(map, type, node + _w, id, frontier);
+            if (left) frontier.Enqueue(node);       // still has free neighbours -> try again later
+        }
+    }
+
+    // returns true if the neighbour is free but was not claimed this time
+    private bool TryClaim(int[] map, TileType type, int m, int id, Queue<int> q)
+    {
+        if (map[m] != -1 || _tiles[m] != type) return false;
+        if (Coin75()) { map[m] = id; q.Enqueue(m); return false; }
+        return true;
+    }
+
+    #endregion
+
+    #region Generation: provinces
+
+    // count = random(minProvinces .. W*H/divisor)
+    private void GenerateProvinces()
+    {
+        int n = _w * _h;
+        int land = _landIdx.Length;
+        _tileProvince = new int[n];
+        if (land == 0) { Fill(_tileProvince, -1); return; }
+
+        int maxP = Mathf.Max(_s.minProvinces, n / Mathf.Max(1, _s.provinceMaxDivisor));
+        int target = _rng.NextInt(_s.minProvinces, maxP + 1);
+        target = Mathf.Clamp(target, 1, Mathf.Max(1, land / Mathf.Max(1, _s.minTilesPerProvince)));
+
+        int pc = PartitionTiles(_landIdx, _tileProvince, TileType.Land, target);
+
+        // Province objects with exact-size tile arrays + random stats
         var counts = new int[pc];
         for (int li = 0; li < land; li++) counts[_tileProvince[_landIdx[li]]]++;
 
@@ -686,71 +889,177 @@ public class MapManager : MonoBehaviour
     private float RandomIn(Vector2 range) =>
         range.y > range.x ? _rng.NextFloat(range.x, range.y) : range.x;
 
-    /// <summary>Dart-throwing with a spatial grid: land tiles at least ~0.6*sqrt(area/count) apart.</summary>
-    private List<int> ScatterSeeds(int land, int target)
-    {
-        float r = 0.6f * Mathf.Sqrt((float)land / target);
-        float r2 = r * r;
-        float cell = Mathf.Max(1f, r / 1.4142f);
-        int gw = (int)(_w / cell) + 1, gh = (int)(_h / cell) + 1;
-        var grid = new int[gw * gh];                      // stores tile+1, 0 = empty
-        var seeds = new List<int>(target);
+    #endregion
 
-        for (int attempts = target * 40; seeds.Count < target && attempts > 0; attempts--)
-        {
-            int t = _landIdx[_rng.NextInt(0, land)];
-            int x = t % _w, y = t / _w;
-            int gx = (int)(x / cell), gy = (int)(y / cell);
+    #region Generation: sea blocks
 
-            bool ok = true;
-            for (int yy = Mathf.Max(0, gy - 2); yy <= Mathf.Min(gh - 1, gy + 2) && ok; yy++)
-            {
-                for (int xx = Mathf.Max(0, gx - 2); xx <= Mathf.Min(gw - 1, gx + 2); xx++)
-                {
-                    int s = grid[yy * gw + xx] - 1;
-                    if (s < 0) continue;
-                    int dx = s % _w - x, dy = s / _w - y;
-                    if (dx * dx + dy * dy < r2) { ok = false; break; }
-                }
-            }
-            if (!ok) continue;
-            grid[gy * gw + gx] = t + 1;
-            seeds.Add(t);
-        }
-        if (seeds.Count == 0) seeds.Add(_landIdx[_rng.NextInt(0, land)]);
-        return seeds;
-    }
-
-    /// <summary>
-    /// Even-speed growth (FIFO queue): all provinces expand at the same pace, giving compact, rounded shapes.
-    /// Each free neighbour is claimed with 75% chance so the edges stay organic instead of diamond-shaped.
-    /// </summary>
-    private void GrowTiles(Queue<int> frontier)
+    // Water tiles are grouped into big blocks (one block ~ seaTilesPerBlock tiles). Every water body,
+    // even a small lake, gets at least one block. Sea logic then works on a few hundred blocks, not millions of tiles.
+    private void GenerateSeas()
     {
         int n = _w * _h;
-        while (frontier.Count > 0)
+        _tileSea = new int[n];
+        int water = n - _landIdx.Length;
+        if (water <= 0) { Fill(_tileSea, -1); return; }
+
+        var idx = new int[water];
+        int k = 0;
+        for (int i = 0; i < n; i++) if (_tiles[i] == TileType.Water) idx[k++] = i;
+
+        int target = Mathf.Max(1, water / Mathf.Max(256, _s.seaTilesPerBlock));
+        int sc = PartitionTiles(idx, _tileSea, TileType.Water, target);
+
+        var counts = new int[sc];
+        for (int i = 0; i < water; i++) counts[_tileSea[idx[i]]]++;
+
+        var sumX = new double[sc];
+        var sumY = new double[sc];
+        var fill = new int[sc];
+        for (int i = 0; i < sc; i++)
+            _seas.Add(new SeaRegion
+            {
+                Id = i,
+                Tiles = new int[counts[i]],
+                Min = new Vector2Int(int.MaxValue, int.MaxValue),
+                Max = new Vector2Int(int.MinValue, int.MinValue)
+            });
+
+        for (int i = 0; i < water; i++)
         {
-            int node = frontier.Dequeue();
-            int id = _tileProvince[node];
-            int x = node % _w;
-            bool left = false;
-            if (x > 0) left |= TryClaim(node - 1, id, frontier);
-            if (x < _w - 1) left |= TryClaim(node + 1, id, frontier);
-            if (node >= _w) left |= TryClaim(node - _w, id, frontier);
-            if (node + _w < n) left |= TryClaim(node + _w, id, frontier);
-            if (left) frontier.Enqueue(node);       // still has free neighbours -> try again later
+            int t = idx[i];
+            int id = _tileSea[t];
+            SeaRegion s = _seas[id];
+            int x = t % _w, y = t / _w;
+            s.Tiles[fill[id]++] = t;
+            sumX[id] += x; sumY[id] += y;
+            if (x < s.Min.x) s.Min.x = x;
+            if (y < s.Min.y) s.Min.y = y;
+            if (x > s.Max.x) s.Max.x = x;
+            if (y > s.Max.y) s.Max.y = y;
+        }
+        for (int i = 0; i < sc; i++)
+            _seas[i].Centroid = new Vector2((float)(sumX[i] / counts[i]), (float)(sumY[i] / counts[i]));
+    }
+
+    #endregion
+
+    #region Generation: adjacency (province-province, sea-sea, province-sea in ONE pass)
+
+    private sealed class AdjacencyBuilder
+    {
+        private readonly HashSet<long> _seen = new HashSet<long>();
+        private long _last = -1;
+        public readonly List<int>[] ProvProv, SeaSea, ProvSea, SeaProv;
+
+        public AdjacencyBuilder(int provinces, int seas)
+        {
+            ProvProv = NewLists(provinces); SeaSea = NewLists(seas);
+            ProvSea = NewLists(provinces); SeaProv = NewLists(seas);
+        }
+
+        private static List<int>[] NewLists(int n)
+        {
+            var l = new List<int>[n];
+            for (int i = 0; i < n; i++) l[i] = new List<int>(6);
+            return l;
+        }
+
+        private bool IsNew(int kind, int a, int b)
+        {
+            long key = ((long)kind << 60) | ((long)a << 30) | (long)b;
+            if (key == _last) return false;
+            _last = key;
+            return _seen.Add(key);
+        }
+
+        /// <summary>Two touching tiles: (province a, sea a) and (province b, sea b); -1 = none.</summary>
+        public void Edge(int pa, int sa, int pb, int sb)
+        {
+            if (pa == pb && sa == sb) return;
+            if (pa >= 0 && pb >= 0)
+            {
+                int lo = pa < pb ? pa : pb, hi = pa < pb ? pb : pa;
+                if (!IsNew(0, lo, hi)) return;
+                ProvProv[pa].Add(pb); ProvProv[pb].Add(pa);
+            }
+            else if (sa >= 0 && sb >= 0)
+            {
+                int lo = sa < sb ? sa : sb, hi = sa < sb ? sb : sa;
+                if (!IsNew(1, lo, hi)) return;
+                SeaSea[sa].Add(sb); SeaSea[sb].Add(sa);
+            }
+            else if (pa >= 0 && sb >= 0) Coast(pa, sb);
+            else if (sa >= 0 && pb >= 0) Coast(pb, sa);
+        }
+
+        private void Coast(int p, int s)
+        {
+            if (!IsNew(2, p, s)) return;
+            ProvSea[p].Add(s);
+            SeaProv[s].Add(p);
         }
     }
 
-    // returns true if the neighbour is free but was not claimed this time
-    private bool TryClaim(int m, int id, Queue<int> q)
+    private void GenerateAdjacency()
     {
-        if (_tileProvince[m] != -1 || _tiles[m] != TileType.Land) return false;
-        if (_rng.NextFloat(0f, 1f) < 0.75f) { _tileProvince[m] = id; q.Enqueue(m); return false; }
-        return true;
+        int w = _w, h = _h;
+        int pc = _provinces.Count, sc = _seas.Count;
+        var b = new AdjacencyBuilder(pc, sc);
+
+        for (int y = 0; y < h; y++)
+        {
+            int row = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                int i = row + x;
+                int pa = _tileProvince[i], sa = _tileSea[i];
+                if (x < w - 1) b.Edge(pa, sa, _tileProvince[i + 1], _tileSea[i + 1]);
+                if (y < h - 1) b.Edge(pa, sa, _tileProvince[i + w], _tileSea[i + w]);
+            }
+        }
+
+        _coastSeas = new int[pc][];
+        for (int i = 0; i < pc; i++)
+        {
+            _provinces[i].Neighbors = b.ProvProv[i].ToArray();   // land borders (used by AI / gameplay / merging)
+            _coastSeas[i] = b.ProvSea[i].ToArray();
+        }
+        for (int i = 0; i < sc; i++)
+        {
+            _seas[i].Neighbors = b.SeaSea[i].ToArray();
+            _seas[i].LandNeighbors = b.SeaProv[i].ToArray();
+        }
+
+        // lakes = sea blocks whose connected water body is small
+        var body = new int[sc];
+        for (int i = 0; i < sc; i++) body[i] = -1;
+        var stack = new List<int>();
+        var members = new List<int>();
+        for (int s = 0; s < sc; s++)
+        {
+            if (body[s] >= 0) continue;
+            members.Clear(); stack.Clear();
+            body[s] = s; stack.Add(s);
+            int tiles = 0;
+            while (stack.Count > 0)
+            {
+                int c = stack[stack.Count - 1];
+                stack.RemoveAt(stack.Count - 1);
+                members.Add(c);
+                tiles += _seas[c].TileCount;
+                foreach (int m in _seas[c].Neighbors)
+                    if (body[m] < 0) { body[m] = s; stack.Add(m); }
+            }
+            bool lake = tiles < _s.lakeMaxTiles;
+            foreach (int m in members) _seas[m].IsLake = lake;
+        }
     }
 
-    // ── NATIONS (balanced) ──
+    #endregion
+
+    #region Generation: nations
+
+    // NATIONS (balanced)
     //  1. N nations are distributed over the landmasses in proportion to their land.
     //  2. Inside a landmass every nation gets a fair share +- nationSizeVariation  (no superpowers).
     //  3. Landmasses too small for a nation of their own become colonies of the nearest nation.
@@ -761,20 +1070,8 @@ public class MapManager : MonoBehaviour
         if (pc == 0) return;
         int land = _landIdx.Length;
 
-        // adjacency
-        var adj = new List<int>[pc];
-        for (int i = 0; i < pc; i++) adj[i] = new List<int>(6);
-        int n = _w * _h;
-        for (int li = 0; li < land; li++)
-        {
-            int i = _landIdx[li];
-            int a = _tileProvince[i];
-            if (i % _w < _w - 1) LinkProvinces(adj, a, _tileProvince[i + 1]);
-            if (i + _w < n) LinkProvinces(adj, a, _tileProvince[i + _w]);
-        }
-
-        // keep the land borders on the provinces (used by AI / gameplay)
-        for (int i = 0; i < pc; i++) _provinces[i].Neighbors = adj[i].ToArray();
+        var adj = new int[pc][];
+        for (int i = 0; i < pc; i++) adj[i] = _provinces[i].Neighbors;
 
         // connected components of the province graph (islands / continents)
         var compOf = new int[pc];
@@ -969,52 +1266,6 @@ public class MapManager : MonoBehaviour
         _pendingColors = MakeNationColors(regions);
     }
 
-    private void GenerateNames(uint seed)
-    {
-        var rng = new Unity.Mathematics.Random(HashSeed(seed ^ 0x9E3779B9u));
-        var usedP = new HashSet<string>();
-        for (int i = 0; i < _provinces.Count; i++)
-            _provinces[i].Name = NameManager.ProvinceName(ref rng, usedP);
-
-        if (_pendingColors == null) return;
-        var usedN = new HashSet<string>();
-        _pendingNames = new string[_pendingColors.Length];
-        for (int i = 0; i < _pendingNames.Length; i++)
-            _pendingNames[i] = NameManager.NationName(ref rng, usedN);
-    }
-
-    /// <summary>Main thread: creates the nations in the WorldManager and gives every province to its owner.</summary>
-    private void RegisterNations()
-    {
-        if (_pendingOwner == null || _pendingColors == null) return;
-
-        _world.ClearNations();
-        var created = new Nation[_pendingColors.Length];
-        for (int i = 0; i < created.Length; i++)
-            created[i] = _world.CreateNation(
-            _pendingNames != null ? _pendingNames[i] : "Nation " + (i + 1), _pendingColors[i]);
-
-        for (int i = 0; i < _provinces.Count; i++)
-            _world.AssignProvince(_provinces[i], created[_pendingOwner[i]]);
-
-        for (int i = 0; i < created.Length; i++)
-            _world.SetCapital(created[i], _provinces[_pendingCapital[i]]);
-
-        _pendingOwner = null;
-        _pendingColors = null;
-        _pendingCapital = null;
-        _pendingNames = null;
-    }
-
-    private static void LinkProvinces(List<int>[] adj, int a, int b)
-    {
-        if (b < 0 || b == a) return;
-        var la = adj[a];
-        if (la.Contains(b)) return;
-        la.Add(b);
-        adj[b].Add(a);
-    }
-
     private List<int> PickProvinceSeeds(List<int> comp, int k)
     {
         var seeds = new List<int> { comp[_rng.NextInt(0, comp.Count)] };
@@ -1037,7 +1288,32 @@ public class MapManager : MonoBehaviour
         return seeds;
     }
 
-    // ── distinct nation colors: best-candidate sampling in a perceptual-ish color space ──
+    #endregion
+
+    #region Generation: names & colors
+
+    private void GenerateNames(uint seed)
+    {
+        var rng = new Unity.Mathematics.Random(HashSeed(seed ^ 0x9E3779B9u));
+        var usedP = new HashSet<string>();
+        for (int i = 0; i < _provinces.Count; i++)
+            _provinces[i].Name = NameManager.ProvinceName(ref rng, usedP);
+
+        var usedS = new HashSet<string>();
+        for (int i = 0; i < _seas.Count; i++)
+        {
+            string baseName = NameManager.ProvinceName(ref rng, usedS);
+            _seas[i].Name = _seas[i].IsLake ? "Lake " + baseName : baseName + " Sea";
+        }
+
+        if (_pendingColors == null) return;
+        var usedN = new HashSet<string>();
+        _pendingNames = new string[_pendingColors.Length];
+        for (int i = 0; i < _pendingNames.Length; i++)
+            _pendingNames[i] = NameManager.NationName(ref rng, usedN);
+    }
+
+    // distinct nation colors: best-candidate sampling in a perceptual-ish color space
     private Color[] MakeNationColors(int count)
     {
         var result = new Color[count];
@@ -1083,13 +1359,87 @@ public class MapManager : MonoBehaviour
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  VISUALS  (main thread)
-    //   Overview : one texture, ~1024px max, always visible, nation borders only.
-    //   Chunks   : 128x128-tile detail pieces (color 1px/tile + Alpha8 border texture) built only for
-    //              what the camera sees, with province (40%) and nation (80%) borders.
-    // ─────────────────────────────────────────────────────────────────────
-    private void BuildRendering()
+    #endregion
+
+    #region Generation: register nations (main thread)
+
+    /// <summary>Main thread: creates the nations in the WorldManager and gives every province to its owner.</summary>
+    private void RegisterNations()
+    {
+        if (_pendingOwner == null || _pendingColors == null) return;
+
+        _world.ClearNations();
+        var created = new Nation[_pendingColors.Length];
+        for (int i = 0; i < created.Length; i++)
+            created[i] = _world.CreateNation(
+                _pendingNames != null ? _pendingNames[i] : "Nation " + (i + 1), _pendingColors[i]);
+
+        for (int i = 0; i < _provinces.Count; i++)
+            _world.AssignProvince(_provinces[i], created[_pendingOwner[i]]);
+
+        for (int i = 0; i < created.Length; i++)
+            _world.SetCapital(created[i], _provinces[_pendingCapital[i]]);
+
+        for (int i = 0; i < _provinces.Count; i++) _ownerKey[i] = _provinces[i].OwnerNationId;
+
+        _pendingOwner = null;
+        _pendingColors = null;
+        _pendingCapital = null;
+        _pendingNames = null;
+    }
+
+    #endregion
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  VISUALS
+    //   Overview : one texture, ~1024px max, always visible, nation borders only. Pixels are built OFF the main thread.
+    //   Chunks   : detail pieces (color 1px/tile + Alpha8 border texture) built only for what the camera sees.
+    //   Changes are batched: one overview upload + a budgeted number of chunk refreshes per frame.
+    // ═════════════════════════════════════════════════════════════════════
+
+    #region Visuals: fields
+
+    private class Chunk
+    {
+        public int cx, cy;
+        public GameObject go;
+        public Texture2D color, border;
+        public Sprite colorSprite, borderSprite;
+    }
+
+    private int _cs, _ppt, _provPx, _nationPx;
+    private byte _provAlpha, _nationAlpha, _seaAlpha;
+    private Color32 _borderRgb;
+
+    private GameObject _ovGo;
+    private Texture2D _ovTex;
+    private Sprite _ovSprite;
+    private Color32[] _ovPx;
+    private int _ovScale, _ovW, _ovH;
+
+    private Transform _chunkRoot;
+    private Chunk[] _chunks;
+    private int _ccx, _ccy;
+    private readonly Stack<Chunk> _pool = new Stack<Chunk>();
+    private Color32[] _chunkColorBuf;
+    private byte[] _chunkBorderBuf;
+
+    private Vector3 _lastCamPos;
+    private Quaternion _lastCamRot;
+    private float _lastZoom, _lastAspect;
+    private bool _chunkWorkPending;
+
+    // batched dirty state
+    private bool _ovDirty;
+    private int _dMinX, _dMinY, _dMaxX, _dMaxY;
+    private bool[] _chunkDirty;
+    private bool _anyChunkDirty;
+
+    #endregion
+
+    #region Visuals: setup
+
+    private void InitRenderParams()
     {
         _cs = Mathf.Clamp(_s.chunkSize, 32, 256);
         _ppt = Mathf.Clamp(_s.borderPixelsPerTile, 4, 16);
@@ -1097,15 +1447,36 @@ public class MapManager : MonoBehaviour
         _nationPx = Mathf.Clamp(_s.nationBorderPixels, 1, Mathf.Max(1, _ppt / 2));
         _provAlpha = (byte)Mathf.RoundToInt(_s.provinceBorderAlpha * 255f);
         _nationAlpha = (byte)Mathf.RoundToInt(_s.nationBorderAlpha * 255f);
+        _seaAlpha = (byte)Mathf.RoundToInt(_s.seaBorderAlpha * 255f);
         _borderRgb = _s.borderColor;
+    }
 
-        foreach (var p in _provinces) UpdateProvinceColor(p);
+    /// <summary>Background thread: province colors, owner keys and the whole overview pixel buffer.</summary>
+    private void PrepareVisuals()
+    {
+        int pc = _provinces.Count;
+        _ownerKey = new int[pc];
+        for (int i = 0; i < pc; i++)
+        {
+            // nation ids are handed out 0..N-1 in region order by WorldManager.CreateNation
+            int key = _pendingOwner != null ? _pendingOwner[i] : -1;
+            _ownerKey[i] = key;
+            Province p = _provinces[i];
+            Color c = key >= 0 && _pendingColors != null ? _pendingColors[key] : _s.neutralColor;
+            p.Color = new Color(c.r * p.Shade, c.g * p.Shade, c.b * p.Shade, 1f);
+        }
+        BuildOverviewPixels();
+    }
 
-        BuildOverview();
+    /// <summary>Main thread: creates the GameObjects / textures from the prepared data.</summary>
+    private void BuildRendering()
+    {
+        CreateOverviewObjects();
 
         _ccx = CeilDiv(_w, _cs);
         _ccy = CeilDiv(_h, _cs);
         _chunks = new Chunk[_ccx * _ccy];
+        _chunkDirty = new bool[_chunks.Length];
         _chunkColorBuf = new Color32[_cs * _cs];
         _chunkBorderBuf = new byte[_cs * _ppt * _cs * _ppt];
         var rootGo = new GameObject("Map Chunks");
@@ -1131,102 +1502,99 @@ public class MapManager : MonoBehaviour
         int p = _tileProvince[i];
         return p >= 0 ? _provinces[p].Color : (Color32)_s.neutralColor;
     }
-    private void BuildCapitalMarkers()
+
+    #endregion
+
+    #region Visuals: batched refresh
+
+    /// <summary>Queues a repaint of everything around the province (overview rect + loaded chunks). Cheap: no texture work here.</summary>
+    private void MarkProvinceDirty(Province p)
     {
-        DestroyMarkers();
-        if (!capitalMarkerPrefab || _world == null) return;
+        int minX = Mathf.Max(0, p.Min.x - 1), minY = Mathf.Max(0, p.Min.y - 1);
+        int maxX = Mathf.Min(_w - 1, p.Max.x + 1), maxY = Mathf.Min(_h - 1, p.Max.y + 1);
 
-        var root = new GameObject("Capital Markers");
-        root.transform.SetParent(transform, false);
-        root.transform.localPosition = PivotOffset;
-        _markerRoot = root.transform;
-
-        RefreshCapitalMarkers();
-    }
-
-    public void RefreshCapitalMarkers()
-    {
-        if (_markerRoot == null || !capitalMarkerPrefab) return;
-        var pool = PoolManager.Instance;
-
-        List<int> stale = null;
-        foreach (var kv in _markers)
-            if (_world.GetNation(kv.Key) == null)
-            {
-                if (stale == null) stale = new List<int>();
-                stale.Add(kv.Key);
-            }
-        if (stale != null)
-            for (int i = 0; i < stale.Count; i++)
-            {
-                if (_markers[stale[i]] != null) pool.Despawn(_markers[stale[i]]);
-                _markers.Remove(stale[i]);
-            }
-
-        foreach (Nation n in _world.Nations)
+        if (!_ovDirty) { _dMinX = minX; _dMinY = minY; _dMaxX = maxX; _dMaxY = maxY; _ovDirty = true; }
+        else
         {
-            Province cap = n.Capital;
-            _markers.TryGetValue(n.Id, out GameObject go);
-
-            if (cap == null)
-            {
-                if (go != null) pool.Despawn(go);
-                _markers.Remove(n.Id);
-                continue;
-            }
-
-            if (go == null || !go.activeSelf)     // missing or collected by the pool
-            {
-                go = pool.Spawn(capitalMarkerPrefab, _markerRoot);
-                _markers[n.Id] = go;
-            }
-
-            go.transform.localPosition = new Vector3(
-                (cap.Centroid.x + 0.5f) * _s.tileSize, (cap.Centroid.y + 0.5f) * _s.tileSize, 0f);
-
-            var sr = go.GetComponentInChildren<SpriteRenderer>();
-            if (!sr) continue;
-            sr.color = InverseColor(n.Color);
-            sr.sortingOrder = markerSortingOrder;
-
-            float tiles = Mathf.Max(markerMinTiles, Mathf.Sqrt(cap.TileCount) * markerProvinceFraction);
-            float spriteSize = sr.sprite ? Mathf.Max(0.0001f, sr.sprite.bounds.size.x) : 1f;
-            float s = tiles * _s.tileSize / spriteSize;
-            go.transform.localScale = new Vector3(s, s, 1f);
+            if (minX < _dMinX) _dMinX = minX;
+            if (minY < _dMinY) _dMinY = minY;
+            if (maxX > _dMaxX) _dMaxX = maxX;
+            if (maxY > _dMaxY) _dMaxY = maxY;
         }
+
+        for (int cy = minY / _cs; cy <= maxY / _cs; cy++)
+            for (int cx = minX / _cs; cx <= maxX / _cs; cx++)
+            {
+                int ci = cy * _ccx + cx;
+                if (_chunks[ci] == null) continue;          // unloaded chunks are drawn from fresh data when built
+                _chunkDirty[ci] = true;
+                _anyChunkDirty = true;
+            }
     }
 
-    private void DestroyMarkers()
+    private void FlushVisuals(ref int budget)
     {
-        if (PoolManager.HasInstance)
-            foreach (var kv in _markers) if (kv.Value != null) PoolManager.Instance.Despawn(kv.Value);
-        _markers.Clear();
-        if (_markerRoot) Destroy(_markerRoot.gameObject);
-        _markerRoot = null;
-    }
-    private static Color InverseColor(Color c)
-    {
-        var inv = new Color(1f - c.r, 1f - c.g, 1f - c.b, 1f);
-        float dr = inv.r - c.r, dg = inv.g - c.g, db = inv.b - c.b;
-        if (dr * dr + dg * dg + db * db < 0.15f)               // too close (greys) -> black / white
+        if (_ovDirty)
         {
-            float lum = c.r * 0.299f + c.g * 0.587f + c.b * 0.114f;
-            return lum > 0.5f ? Color.black : Color.white;
+            _ovDirty = false;
+            RepaintOverview(_dMinX, _dMinY, _dMaxX, _dMaxY);   // all changes of this frame -> ONE upload
         }
-        return inv;
+
+        if (!_anyChunkDirty) return;
+        bool left = false;
+        for (int i = 0; i < _chunkDirty.Length; i++)
+        {
+            if (!_chunkDirty[i]) continue;
+            Chunk c = _chunks[i];
+            if (c == null) { _chunkDirty[i] = false; continue; }
+            if (budget <= 0) { left = true; continue; }
+            budget--;
+            FillChunk(c);                                      // clears the dirty flag
+        }
+        _anyChunkDirty = left;
     }
 
-    // ── overview ──
-    private void BuildOverview()
+    #endregion
+
+    #region Visuals: overview
+
+    private void BuildOverviewPixels()
     {
         int maxSide = Mathf.Clamp(_s.overviewMaxSize, 128, 4096);
         _ovScale = Mathf.Max(1, CeilDiv(Mathf.Max(_w, _h), maxSide));
         _ovW = CeilDiv(_w, _ovScale);
         _ovH = CeilDiv(_h, _ovScale);
         _ovPx = new Color32[_ovW * _ovH];
-        for (int y = 0; y < _ovH; y++)
-            for (int x = 0; x < _ovW; x++) PaintOverviewPixel(x, y);
 
+        // pass 1: nation key per overview pixel (water = -2, neutral land = -1), one tile lookup per pixel
+        var keys = new int[_ovW * _ovH];
+        for (int y = 0; y < _ovH; y++)
+            for (int x = 0; x < _ovW; x++)
+                keys[y * _ovW + x] = OverviewKey(x, y);
+
+        // pass 2: color + 1px nation border (only the side with the higher key is darkened; water counts as lowest)
+        for (int y = 0; y < _ovH; y++)
+        {
+            for (int x = 0; x < _ovW; x++)
+            {
+                int i = y * _ovW + x;
+                int key = keys[i];
+                if (key == -2) { _ovPx[i] = _s.waterColor; continue; }
+
+                Color32 col = _provinces[_tileProvince[OverviewTile(x, y)]].Color;
+                int l = x > 0 ? keys[i - 1] : -2;
+                int r = x < _ovW - 1 ? keys[i + 1] : -2;
+                int d = y > 0 ? keys[i - _ovW] : -2;
+                int u = y < _ovH - 1 ? keys[i + _ovW] : -2;
+                if (l < key || r < key || d < key || u < key)
+                    col = Color32.Lerp(col, _borderRgb, _s.nationBorderAlpha);
+                _ovPx[i] = col;
+            }
+        }
+    }
+
+    private void CreateOverviewObjects()
+    {
         _ovTex = new Texture2D(_ovW, _ovH, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp };
         _ovTex.SetPixelData(_ovPx, 0);
         _ovTex.Apply(false);
@@ -1248,7 +1616,7 @@ public class MapManager : MonoBehaviour
         if (px < 0 || py < 0 || px >= _ovW || py >= _ovH) return -2;
         int t = OverviewTile(px, py);
         if (_tiles[t] == TileType.Water) return -2;
-        return _provinces[_tileProvince[t]].OwnerNationId;
+        return _ownerKey[_tileProvince[t]];
     }
 
     private void PaintOverviewPixel(int px, int py)
@@ -1256,10 +1624,9 @@ public class MapManager : MonoBehaviour
         int t = OverviewTile(px, py);
         if (_tiles[t] == TileType.Water) { _ovPx[py * _ovW + px] = _s.waterColor; return; }
 
-        Province p = _provinces[_tileProvince[t]];
-        Color32 col = p.Color;
-        int key = p.OwnerNationId;
-        // 1px nation border: only the side with the higher key is darkened (water counts as lowest)
+        int pid = _tileProvince[t];
+        Color32 col = _provinces[pid].Color;
+        int key = _ownerKey[pid];
         if (OverviewKey(px - 1, py) < key || OverviewKey(px + 1, py) < key ||
             OverviewKey(px, py - 1) < key || OverviewKey(px, py + 1) < key)
             col = Color32.Lerp(col, _borderRgb, _s.nationBorderAlpha);
@@ -1276,8 +1643,11 @@ public class MapManager : MonoBehaviour
         _ovTex.Apply(false);
     }
 
-    // ── chunks ──
-    private void UpdateChunkVisibility()
+    #endregion
+
+    #region Visuals: detail chunks
+
+    private void UpdateChunkVisibility(ref int budget)
     {
         Camera cam = viewCamera ? viewCamera : Camera.main;
         if (!cam) return;
@@ -1305,7 +1675,6 @@ public class MapManager : MonoBehaviour
             if (c != null && (c.cx < n0x || c.cx > n1x || c.cy < n0y || c.cy > n1y)) ReleaseChunk(c);
         }
 
-        int budget = Mathf.Max(1, _s.chunkBuildsPerFrame);
         for (int cy = cy0; cy <= cy1; cy++)                       // visible first
             for (int cx = cx0; cx <= cx1; cx++)
                 TryBuildChunk(cx, cy, ref budget);
@@ -1326,8 +1695,8 @@ public class MapManager : MonoBehaviour
         c.cx = cx; c.cy = cy;
         c.go.transform.localPosition = new Vector3(cx * _cs * _s.tileSize, cy * _cs * _s.tileSize, 0f);
         c.go.SetActive(true);
-        FillChunk(c);
         _chunks[cy * _ccx + cx] = c;
+        FillChunk(c);
     }
 
     private bool TryGetVisibleChunks(Camera cam, out int cx0, out int cy0, out int cx1, out int cy1)
@@ -1382,6 +1751,8 @@ public class MapManager : MonoBehaviour
 
     private void FillChunk(Chunk c)
     {
+        _chunkDirty[c.cy * _ccx + c.cx] = false;
+
         int x0 = c.cx * _cs, y0 = c.cy * _cs;
         for (int ly = 0; ly < _cs; ly++)
         {
@@ -1402,12 +1773,15 @@ public class MapManager : MonoBehaviour
     }
 
     // Each land tile paints a strip INSIDE itself along every edge that touches a different province.
-    //   same nation on both sides -> province border (thin, 40% alpha)
-    //   different nation / water  -> nation border   (bold, 80% alpha)
+    //   same nation on both sides -> province border (thin)
+    //   different nation / water  -> nation border   (bold)
+    // Water tiles optionally paint a faint line where two sea blocks meet.
     private void DrawChunkBorders(int x0, int y0)
     {
         int stride = _cs * _ppt;
         int xMax = Mathf.Min(_cs, _w - x0), yMax = Mathf.Min(_cs, _h - y0);
+        bool seaLines = _seaAlpha > 0;
+
         for (int ly = 0; ly < yMax; ly++)
         {
             int gy = y0 + ly;
@@ -1415,10 +1789,15 @@ public class MapManager : MonoBehaviour
             {
                 int gx = x0 + lx;
                 int pa = _tileProvince[gy * _w + gx];
-                if (pa < 0) continue;
-                int na = _provinces[pa].OwnerNationId;
                 int px = lx * _ppt, py = ly * _ppt;
 
+                if (pa < 0)
+                {
+                    if (seaLines) DrawSeaBorders(gx, gy, px, py, stride);
+                    continue;
+                }
+
+                int na = _ownerKey[pa];
                 if (Edge(pa, na, gx - 1, gy, out byte a, out int t)) Paint(px, py, t, _ppt, a, stride);               // left
                 if (Edge(pa, na, gx + 1, gy, out a, out t)) Paint(px + _ppt - t, py, t, _ppt, a, stride);             // right
                 if (Edge(pa, na, gx, gy - 1, out a, out t)) Paint(px, py, _ppt, t, a, stride);                        // bottom
@@ -1433,10 +1812,27 @@ public class MapManager : MonoBehaviour
         int pb = InBounds(nx, ny) ? _tileProvince[ny * _w + nx] : -1;
         if (pb == pa) return false;
 
-        bool nationBorder = pb < 0 || _provinces[pb].OwnerNationId != na;
+        bool nationBorder = pb < 0 || _ownerKey[pb] != na;
         alpha = nationBorder ? _nationAlpha : _provAlpha;
         thickness = nationBorder ? _nationPx : _provPx;
         return true;
+    }
+
+    private void DrawSeaBorders(int gx, int gy, int px, int py, int stride)
+    {
+        int i = gy * _w + gx;
+        int sa = _tileSea[i];
+        if (sa < 0) return;
+        if (gx > 0 && SeaDiffers(sa, i - 1)) Paint(px, py, 1, _ppt, _seaAlpha, stride);
+        if (gx < _w - 1 && SeaDiffers(sa, i + 1)) Paint(px + _ppt - 1, py, 1, _ppt, _seaAlpha, stride);
+        if (gy > 0 && SeaDiffers(sa, i - _w)) Paint(px, py, _ppt, 1, _seaAlpha, stride);
+        if (gy < _h - 1 && SeaDiffers(sa, i + _w)) Paint(px, py + _ppt - 1, _ppt, 1, _seaAlpha, stride);
+    }
+
+    private bool SeaDiffers(int sa, int j)
+    {
+        int sb = _tileSea[j];
+        return sb >= 0 && sb != sa;
     }
 
     private void Paint(int px, int py, int w, int h, byte alpha, int stride)
@@ -1449,24 +1845,11 @@ public class MapManager : MonoBehaviour
         }
     }
 
-    private void RefreshProvinceVisuals(Province p)
-    {
-        int minX = Mathf.Max(0, p.Min.x - 1), minY = Mathf.Max(0, p.Min.y - 1);
-        int maxX = Mathf.Min(_w - 1, p.Max.x + 1), maxY = Mathf.Min(_h - 1, p.Max.y + 1);
-
-        RepaintOverview(minX, minY, maxX, maxY);
-
-        for (int cy = minY / _cs; cy <= maxY / _cs; cy++)
-            for (int cx = minX / _cs; cx <= maxX / _cs; cx++)
-            {
-                Chunk c = _chunks[cy * _ccx + cx];
-                if (c != null) FillChunk(c);       // only loaded (visible) chunks cost anything
-            }
-    }
-
     private void ReleaseChunk(Chunk c)
     {
-        _chunks[c.cy * _ccx + c.cx] = null;
+        int ci = c.cy * _ccx + c.cx;
+        _chunks[ci] = null;
+        _chunkDirty[ci] = false;
         c.go.SetActive(false);
         if (_pool.Count < _s.maxPooledChunks) _pool.Push(c);
         else DestroyChunk(c);
@@ -1488,14 +1871,136 @@ public class MapManager : MonoBehaviour
         if (c.go) Destroy(c.go);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  MERGE PROVINCES
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
 
-    public bool CanMerge(Province origin, IList<Province> group, out string error)
+    #region Capital markers
+
+    private sealed class Marker
     {
-        return Validate(origin, group, new List<Province>(), out error);
+        public GameObject go;
+        public SpriteRenderer sr;     // cached: no GetComponent per refresh
     }
+
+    private Transform _markerRoot;
+    private readonly Dictionary<int, Marker> _markers = new Dictionary<int, Marker>();
+    private readonly HashSet<int> _dirtyMarkers = new HashSet<int>();
+    private bool _allMarkersDirty;
+
+    private void BuildCapitalMarkers()
+    {
+        DestroyMarkers();
+        if (!capitalMarkerPrefab || _world == null) return;
+
+        var root = new GameObject("Capital Markers");
+        root.transform.SetParent(transform, false);
+        root.transform.localPosition = PivotOffset;
+        _markerRoot = root.transform;
+
+        RefreshAllMarkers();
+    }
+
+    /// <summary>Re-checks every capital marker (applied at the end of the frame).</summary>
+    public void RefreshCapitalMarkers() => _allMarkersDirty = true;
+
+    private void MarkMarkerDirty(int nationId)
+    {
+        if (nationId >= 0 && capitalMarkerPrefab) _dirtyMarkers.Add(nationId);
+    }
+
+    private void FlushMarkers()
+    {
+        if (_markerRoot == null) return;
+        if (_allMarkersDirty)
+        {
+            _allMarkersDirty = false;
+            _dirtyMarkers.Clear();
+            RefreshAllMarkers();
+            return;
+        }
+        if (_dirtyMarkers.Count == 0) return;
+        foreach (int id in _dirtyMarkers) RefreshMarker(id, _world.GetNation(id));
+        _dirtyMarkers.Clear();
+    }
+
+    private void RefreshAllMarkers()
+    {
+        if (_markerRoot == null || !capitalMarkerPrefab) return;
+
+        List<int> stale = null;
+        foreach (var kv in _markers)
+            if (_world.GetNation(kv.Key) == null)
+            {
+                if (stale == null) stale = new List<int>();
+                stale.Add(kv.Key);
+            }
+        if (stale != null)
+            for (int i = 0; i < stale.Count; i++) RefreshMarker(stale[i], null);
+
+        foreach (Nation n in _world.Nations) RefreshMarker(n.Id, n);
+    }
+
+    private void RefreshMarker(int nationId, Nation n)
+    {
+        var pool = PoolManager.Instance;
+        _markers.TryGetValue(nationId, out Marker m);
+        Province cap = n != null ? n.Capital : null;
+
+        if (cap == null)
+        {
+            if (m != null && m.go != null) pool.Despawn(m.go);
+            _markers.Remove(nationId);
+            return;
+        }
+
+        if (m == null || m.go == null || !m.go.activeSelf)     // missing or collected by the pool
+        {
+            GameObject go = pool.Spawn(capitalMarkerPrefab, _markerRoot);
+            m = new Marker { go = go, sr = go.GetComponentInChildren<SpriteRenderer>() };
+            _markers[nationId] = m;
+        }
+
+        m.go.transform.localPosition = new Vector3(
+            (cap.Centroid.x + 0.5f) * _s.tileSize, (cap.Centroid.y + 0.5f) * _s.tileSize, 0f);
+
+        if (!m.sr) return;
+        m.sr.color = InverseColor(n.Color);
+        m.sr.sortingOrder = markerSortingOrder;
+
+        float tiles = Mathf.Max(markerMinTiles, Mathf.Sqrt(cap.TileCount) * markerProvinceFraction);
+        float spriteSize = m.sr.sprite ? Mathf.Max(0.0001f, m.sr.sprite.bounds.size.x) : 1f;
+        float s = tiles * _s.tileSize / spriteSize;
+        m.go.transform.localScale = new Vector3(s, s, 1f);
+    }
+
+    private void DestroyMarkers()
+    {
+        if (PoolManager.HasInstance)
+            foreach (var kv in _markers) if (kv.Value.go != null) PoolManager.Instance.Despawn(kv.Value.go);
+        _markers.Clear();
+        _dirtyMarkers.Clear();
+        _allMarkersDirty = false;
+        if (_markerRoot) Destroy(_markerRoot.gameObject);
+        _markerRoot = null;
+    }
+
+    private static Color InverseColor(Color c)
+    {
+        var inv = new Color(1f - c.r, 1f - c.g, 1f - c.b, 1f);
+        float dr = inv.r - c.r, dg = inv.g - c.g, db = inv.b - c.b;
+        if (dr * dr + dg * dg + db * db < 0.15f)               // too close (greys) -> black / white
+        {
+            float lum = c.r * 0.299f + c.g * 0.587f + c.b * 0.114f;
+            return lum > 0.5f ? Color.black : Color.white;
+        }
+        return inv;
+    }
+
+    #endregion
+
+    #region Merge provinces
+
+    public bool CanMerge(Province origin, IList<Province> group, out string error) =>
+        Validate(origin, group, new List<Province>(), out error);
 
     public float GetMergeCost(IList<Province> group, Province origin)
     {
@@ -1576,7 +2081,7 @@ public class MapManager : MonoBehaviour
         origin.ProductionIncome.Base = (float)(prod / totalTiles);
         origin.Devastation = pop > 0 ? (float)(dev / pop) : 0f;
 
-        // ── neighbours: union of the group's outside neighbours; outsiders now point to the origin ──
+        // ── land neighbours: union of the group's outside neighbours; outsiders now point to the origin ──
         var outside = new HashSet<int>();
         foreach (Province p in all)
             foreach (int id in p.Neighbors) if (!group2.Contains(id)) outside.Add(id);
@@ -1584,17 +2089,16 @@ public class MapManager : MonoBehaviour
         outside.CopyTo(nb);
         origin.Neighbors = nb;
         foreach (int id in outside)
-        {
-            Province q = _provinces[id];
-            var l = new List<int>(q.Neighbors.Length);
-            bool added = false;
-            foreach (int m in q.Neighbors)
-            {
-                if (group2.Contains(m)) { if (!added) { l.Add(origin.Id); added = true; } }
-                else l.Add(m);
-            }
-            q.Neighbors = l.ToArray();
-        }
+            _provinces[id].Neighbors = RemapIds(_provinces[id].Neighbors, group2, origin.Id);
+
+        // ── sea blocks touching the group now touch the origin ──
+        var coast = new HashSet<int>();
+        foreach (Province p in all) foreach (int s in _coastSeas[p.Id]) coast.Add(s);
+        foreach (int s in coast)
+            _seas[s].LandNeighbors = RemapIds(_seas[s].LandNeighbors, group2, origin.Id);
+        var coastArr = new int[coast.Count];
+        coast.CopyTo(coastArr);
+        _coastSeas[origin.Id] = coastArr;
 
         // ── retire the absorbed provinces ──
         var absorbed = new List<Province>(all.Count - 1);
@@ -1607,19 +2111,33 @@ public class MapManager : MonoBehaviour
             p.MergedInto = origin.Id;
             p.Tiles = Array.Empty<int>();
             p.Neighbors = Array.Empty<int>();
+            _coastSeas[p.Id] = Array.Empty<int>();
+            _ownerKey[p.Id] = -1;
         }
-        owner.MarkDirty();
 
         if (!string.IsNullOrWhiteSpace(newName)) origin.Name = newName.Trim();
         if (hadCapital) _world.SetCapital(owner, origin);
 
-        // ── visuals ──
+        // ── visuals (batched: repainted once at the end of the frame) ──
         UpdateProvinceColor(origin);
-        RefreshProvinceVisuals(origin);       // the borders between the merged provinces disappear
-        RefreshCapitalMarkers();
+        MarkProvinceDirty(origin);            // the borders between the merged provinces disappear
+        MarkMarkerDirty(owner.Id);
 
         OnProvincesMerged?.Invoke(origin, absorbed);
         return origin;
+    }
+
+    /// <summary>Replaces every id of 'group' in 'ids' by one 'replacement' (no duplicates).</summary>
+    private static int[] RemapIds(int[] ids, HashSet<int> group, int replacement)
+    {
+        var l = new List<int>(ids.Length);
+        bool added = false;
+        foreach (int m in ids)
+        {
+            if (group.Contains(m)) { if (!added) { l.Add(replacement); added = true; } }
+            else l.Add(m);
+        }
+        return l.ToArray();
     }
 
     private bool Validate(Province origin, IList<Province> group, List<Province> all, out string error)
@@ -1663,7 +2181,7 @@ public class MapManager : MonoBehaviour
         {
             foreach (Province p in all)
             {
-                if (CombatManager.HasInstance && CombatManager.Instance.GetBattle(p) != null) { error = p.Name + " has a battle."; return false; }
+                if (CombatManager.HasInstance && CombatManager.Instance.IsContested(p)) { error = p.Name + " has a battle."; return false; }
                 if (WarManager.HasInstance)
                 {
                     var wars = WarManager.Instance.Wars;
@@ -1710,6 +2228,10 @@ public class MapManager : MonoBehaviour
         return NameManager.ProvinceName(ref rng, used);
     }
 
+    #endregion
+
+    #region Debug
+
     [ContextMenu("Merge: random province + 2 neighbours (origin name)")]
     private void MenuMerge()
     {
@@ -1724,4 +2246,6 @@ public class MapManager : MonoBehaviour
             return;
         }
     }
+
+    #endregion
 }

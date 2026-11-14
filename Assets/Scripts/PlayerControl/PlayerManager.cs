@@ -41,6 +41,8 @@ public class PlayerManager : MonoBehaviour
     [SerializeField] private int startNationId = -1;
     [Tooltip("ON: nobody is the player (every nation is AI, spectator mode).")]
     [SerializeField] private bool spectator = false;
+    [Tooltip("On: Only render the army of a Side who is in war with player (Ally will always render), if spectator mode, render the war side only")]
+    public bool useFogOfWar = true;
     [Tooltip("Read-only mirror (Editor).")]
     [SerializeField] private string playerNationName;
 

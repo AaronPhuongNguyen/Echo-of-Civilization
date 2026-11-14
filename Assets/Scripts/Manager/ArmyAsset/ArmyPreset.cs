@@ -2,17 +2,22 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+#region Enums
+
 public enum RegimentState : byte
 {
     Idle = 0,          // standing in a province, refilling up to its allocation
     Retreating = 1,    // moving (real map) to a safe province, does not fight, does not refill
     Reinforcing = 2,   // arrived after a retreat, refilling
     Moving = 3,        // marching along a province path
-    Fighting = 4       // inside a battle (no card: the battle card is shown instead)
+    Fighting = 4       // LEGACY: combat is positional now (see Regiment.InRange / InContact), never set any more
 }
 
-/// <summary>Merge = reinforcement column walking to its regiment. Hold = rear guard that fights at the battle site.</summary>
-public enum ColumnRole { None ,Merge, Hold, Occupy }   // keep your existing order/values, just add Occupy
+/// <summary>Merge = reinforcement column walking to its regiment. Occupy = small column that captures provinces.
+/// Hold is LEGACY (rear guards no longer exist) and kept only so old values stay valid.</summary>
+public enum ColumnRole { None, Merge, Hold, Occupy }
+
+#endregion
 
 /// <summary>
 /// One regiment of a nation's Military. PURE LOGIC at a WORLD position of the real map (no GameObject).
@@ -20,12 +25,18 @@ public enum ColumnRole { None ,Merge, Hold, Occupy }   // keep your existing ord
 /// </summary>
 public sealed class Regiment
 {
-    // ── state ──
+    private static int s_nextUid;
+
+    #region State
+
+    /// <summary>Unique id (used for the stateless dice roll of a pair).</summary>
+    public readonly int Uid;
+
     public Military Military { get; private set; }
     /// <summary>Last province reached (the old one while retreating).</summary>
     public Province Province { get; private set; }
     public Province TargetProvince { get; private set; }
-    /// <summary>The province the regiment is physically in right now (updated while marching).</summary>
+    /// <summary>The province the regiment is physically in right now (updated while marching / pushed).</summary>
     public Province CurrentProvince { get; internal set; }
     public RegimentState State { get; internal set; }
 
@@ -36,28 +47,45 @@ public sealed class Regiment
 
     public int StackIndex { get; internal set; }
     public RegimentView View { get; internal set; }
+    /// <summary>Index inside ArmyManager's moving list (-1 = not moving). Makes add / remove O(1).</summary>
+    internal int MovingIndex = -1;
 
     public double Manpower { get; internal set; }
     public float CustomShare { get; internal set; } = -1f;
     public float Share { get; internal set; }
 
-    // ── combat ──
-    public Battle Battle { get; internal set; }
+    #endregion
+
+    #region Combat
+
+    /// <summary>An enemy is inside the outer combat radius: this regiment takes (and deals) damage.</summary>
+    public bool InRange { get; internal set; }
+    /// <summary>An enemy is inside the inner radius: the regiment stops marching and is pushed / pushes.</summary>
+    public bool InContact { get; internal set; }
+
     /// <summary>HP lost that did not yet cost a full manpower.</summary>
     public double LostHp { get; internal set; }
     public double TotalHp => Military != null ? Manpower * Military.HpPerMan.Value : 0.0;
 
+    /// <summary>Set by AI code while the regiment holds a tactical position. Kept for compatibility.</summary>
+    internal bool TacticLock;
 
-    // ── reinforcement column ──
+    #endregion
+
+    #region Reinforcement column
+
     public bool IsColumn { get; internal set; }
     public ColumnRole Role { get; internal set; }
     public Regiment MergeTarget { get; internal set; }
 
-    // ── bookkeeping used by CombatManager ──
-    internal Vector2Int TrailTile = new Vector2Int(-1, -1);
-    internal Province CheckedProvince;
+    #endregion
 
-    public double Allocation => Military != null ? Military.MobilizedCap * Share : 0.0;
+    #region Derived values
+
+    /// <summary>Men this regiment may hold: its share of the mobilized men, never above the regiment cap (100 value).</summary>
+    public double Allocation => Military != null
+        ? Math.Min(Military.MobilizedCap * Share, Military.RegimentCapMen) : 0.0;
+
     public float StrengthPercent
     {
         get { double a = Allocation; return a > 0.0 ? (float)(Manpower / a) : 0f; }
@@ -67,18 +95,19 @@ public sealed class Regiment
     public bool HasPath => _path != null && _pathIndex < _path.Count;
     public Province Destination => HasPath ? _path[_path.Count - 1] : null;
 
+    #endregion
+
     internal Regiment(Military military, Province province, Vector3 worldPosition)
     {
+        Uid = ++s_nextUid;
         Military = military;
         Province = province;
         CurrentProvince = province;
-        CheckedProvince = province;
         WorldPosition = worldPosition;
         State = RegimentState.Idle;
     }
 
-    /// <summary>Set by the AI while the regiment holds a tactical position (siege ring). Auto-support ignores it.</summary>
-    internal bool TacticLock;
+    #region Internal helpers
 
     internal void CopyPath(List<Province> dst)
     {
@@ -93,10 +122,10 @@ public sealed class Regiment
         if (Province == from) Province = to;
         if (CurrentProvince == from) CurrentProvince = to;
         if (TargetProvince == from) TargetProvince = to;
-        if (CheckedProvince == from) CheckedProvince = to;
         if (_path != null)
             for (int i = 0; i < _path.Count; i++) if (_path[i] == from) _path[i] = to;
     }
+
     internal void Clear()
     {
         TacticLock = false;
@@ -104,22 +133,31 @@ public sealed class Regiment
         Province = null;
         TargetProvince = null;
         CurrentProvince = null;
-        CheckedProvince = null;
         View = null;
-        Battle = null;
         MergeTarget = null;
         Role = ColumnRole.None;
         IsColumn = false;
         LostHp = 0.0;
+        InRange = InContact = false;
         State = RegimentState.Idle;
         Manpower = 0.0;
+        MovingIndex = -1;
         if (_path != null) _path.Clear();
         _pathIndex = 0;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  GAMEPLAY API
-    // ─────────────────────────────────────────────────────────────────────
+    /// <summary>Combat push: moves the regiment on the map without touching its path.</summary>
+    internal void Nudge(Vector3 delta) => WorldPosition += delta;
+
+    /// <summary>A standing regiment that was pushed into another province now belongs to it.</summary>
+    internal void SettleIn(Province p) => Province = p;
+
+    internal void Teleport(Vector3 world) => WorldPosition = world;
+
+    #endregion
+
+    #region Gameplay API
+
     public void TakeCasualties(double men)
     {
         if (Military == null || men <= 0.0) return;
@@ -142,7 +180,6 @@ public sealed class Regiment
         _targetWorldPos = firstWorldPos;
         TargetProvince = null;
         State = RegimentState.Moving;
-        TrailTile = new Vector2Int(-1, -1);
     }
 
     internal void BeginRetreat(Province target, Vector3 targetWorldPosition)
@@ -150,27 +187,11 @@ public sealed class Regiment
         if (_path == null) _path = new List<Province>(1); else _path.Clear();
         _path.Add(target);
         _pathIndex = 0;
-        Battle = null;
+        InRange = InContact = false;
         State = RegimentState.Retreating;
         TargetProvince = target;
         _targetWorldPos = targetWorldPosition;
     }
-
-    internal void EnterFight(Battle b)
-    {
-        Battle = b;
-        State = RegimentState.Fighting;
-    }
-
-    /// <summary>After a battle: continue the march if there is one left, otherwise stand still.</summary>
-    internal void LeaveFight()
-    {
-        Battle = null;
-        if (State != RegimentState.Fighting) return;
-        State = HasPath ? RegimentState.Moving : RegimentState.Idle;
-    }
-
-    internal void Teleport(Vector3 world) => WorldPosition = world;
 
     /// <summary>Moves 'step' world units along the path. Returns true when the whole path is done.</summary>
     internal bool StepMove(float step, ArmyManager army)
@@ -209,10 +230,16 @@ public sealed class Regiment
         if (View != null) View.SetManpower(Manpower);
     }
 
+    #endregion
+
+    #region Formatting
+
     public static string FormatManpower(double v)
     {
         if (v >= 1000000.0) return (v / 1000000.0).ToString("0.#") + "M";
         if (v >= 1000.0) return (v / 1000.0).ToString("0.#") + "K";
         return ((int)v).ToString();
     }
+
+    #endregion
 }

@@ -2,136 +2,88 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DATA
-// ─────────────────────────────────────────────────────────────────────────────
+#region Settings & diagnostics data
 
 [Serializable]
 public class CombatSettings
 {
-    [Header("Timing (game-seconds, follows game speed / pause)")]
-    [Min(0.05f)] public float detectInterval = 0.2f;
-    [Tooltip("Damage values are 'per round' = per this many game-seconds.")]
-    [Min(0.05f)] public float tickInterval = 1f;
-    [Tooltip("How often damage is actually applied. Small = smooth (100 -> 99 -> 98). Damage is scaled by stepInterval / tickInterval.")]
-    [Min(0.02f)] public float stepInterval = 0.1f;
+    [Header("Combat step (game-seconds, follows game speed / pause)")]
+    [Tooltip("How often the Burst combat job is scheduled. Damage is scaled by the elapsed time.")]
+    [Min(0.02f)] public float combatInterval = 0.1f;
 
-    [Header("Damage  (ATK / DEF / HP per man are GameValues on each Military)")]
-    [Tooltip("Both sides take this extra damage every tick when Attacker ATK < Defender DEF.")]
-    public GameValue stalemateDamage = new GameValue(1f);
-    [Tooltip("0.5 = +50% damage (attacker when ATK >= DEF of defender, defender when its ATK > attacker DEF).")]
-    public GameValue bonusDamage = new GameValue(0.5f);
-    [Tooltip("Every this many HP lost = 1 manpower lost.")]
-    [Min(1f)] public float hpLostPerManpower = 5f;
-    [Tooltip("Global multiplier of the ATK/DEF damage. Raise = faster battles, lower = slower.")]
-    [Min(0.0001f)] public float damageScale = 0.01f;
+    [Header("Damage")]
+    [Tooltip("hp = ATK^2 / (ATK + DEF) * damageScale * damageMultiplier * seconds. Raise = faster battles.")]
+    [Min(0.00001f)] public float damageScale = 0.005f;
 
-    [Header("Dice (daily roll)")]
+    [Header("Dice (only buff in the game)")]
     public bool useDice = true;
-    [Tooltip("Damage multiplier of the roll winner = 1 + this * dice (1..6).")]
-    public GameValue diceDamageBonus = new GameValue(0.5f);
+    [Tooltip("The side that wins the roll gets ATK and DEF * (1 + this).")]
+    public GameValue diceBonus = new GameValue(0.5f);
+    [Min(1)] public int diceRollDays = 7;
+    [Min(0)] public int diceBuffDays = 6;
+
+    [Header("Push (stronger side pushes the weaker one back)")]
+    [Tooltip("Strength share (0.5..1) where pushing starts.")]
+    [Range(0.5f, 1f)] public float pushStartShare = 0.5f;
+    [Tooltip("Strength share where the push reaches full march speed.")]
+    [Range(0.5f, 1f)] public float pushFullShare = 0.9f;
+
+    [Header("Occupation (must fight / siege first)")]
+    [Tooltip("Progress needed (days) with no enemy fighter left in the province.")]
+    [Min(0.1f)] public float occupyDays = 3f;
+    [Tooltip("Progress per day = 1 / (1 + Defend / this). Higher = defence matters less.")]
+    [Min(0.01f)] public float defendDivisor = 1f;
 
     [Header("Reinforcement")]
     public bool reinforcements = true;
-    [Tooltip("Game-seconds between two reinforcement checks of a battle.")]
     [Min(0.1f)] public float reinforceInterval = 3f;
-    [Tooltip("A regiment asks for help while it holds less than this percent of its allocation.")]
     [Range(1f, 100f)] public float reinforceBelowPercent = 99f;
-    [Tooltip("Size of one column = this percent of the regiment's allocation.")]
     [Range(1f, 100f)] public float columnPercent = 15f;
-    [Tooltip("A column is only sent when it would have at least this many men (and the nation has them).")]
     [Min(1f)] public float minColumnManpower = 50f;
     [Min(1)] public int maxColumnsPerRegiment = 3;
-    [Tooltip("When the main regiment retreats, this part of a column stays to hold the enemy, the rest follows the retreating regiment.")]
-    [Range(0f, 1f)] public float holdSplit = 0.25f;
-    [Tooltip("A column merges when it is this close (tiles) to its regiment (or in the same province).")]
     [Min(0f)] public float mergeRadiusTiles = 3f;
-    [Tooltip("Max new columns created per scan (spreads the cost, nations are served in rotation).")]
     [Min(1)] public int maxNewColumnsPerScan = 12;
 
-    [Header("Occupation columns (independent of critical reinforcement)")]
+    [Header("Occupation columns")]
     public bool occupationColumns = true;
-    [Tooltip("Every nation at war sends one small column this often (game days).")]
     [Min(1)] public int occupierIntervalDays = 7;
-    [Tooltip("Column size = this percent of ArmyManager.manpowerPerRegiment.")]
     [Range(0.1f, 50f)] public float occupierPercent = 5f;
     [Min(1f)] public float occupierMinManpower = 100f;
     [Min(1)] public int maxOccupiersPerNation = 3;
-    [Tooltip("How many provinces one column claims before it goes home.")]
     [Min(1)] public int occupierMaxHops = 4;
 
     [Header("After the war")]
-    [Tooltip("When a war ends, regiments standing in (or marching to) former enemy land walk back to the nearest province of their own nation (the border).")]
     public bool returnToBorderAfterWar = true;
 }
 
 [Serializable]
-public class BattleInfo
+public class CombatDiagnostics
 {
-    public int id;
-    public string province;
-    public string sideA;
-    public string sideB;
-    public double manpowerA, manpowerB;
-    public double hpA, hpB;
-    public int ticks;
+    public int units, inRange, inContact, sieges;
 }
 
-/// <summary>One battle in one province. Side A = the one that attacked (arrived), side B = the defender.</summary>
-public sealed class Battle
+[Serializable]
+public class SiegeInfo
 {
-    public readonly int Id;
-    public readonly Province Province;
-    public readonly Vector3 WorldPos;
-    public readonly Nation LeadA, LeadB;
-    public readonly Color ColorA, ColorB;
-    public readonly List<Regiment> SideA = new List<Regiment>(4);
-    public readonly List<Regiment> SideB = new List<Regiment>(4);
-
-    /// <summary>0 = no roll yet, 1 = side A got the dice, 2 = side B.</summary>
-    public int DiceSide { get; internal set; }
-    public int DiceValue { get; internal set; }
-    internal long DiceDay = -1;
-    public int Ticks { get; internal set; }
-    public bool Ended { get; internal set; }
-    internal float ReinforceTimer;
-    internal BattleView View;
-
-    internal Battle(int id, Province p, Vector3 pos, Nation a, Nation b)
-    {
-        Id = id; Province = p; WorldPos = pos; LeadA = a; LeadB = b;
-        ColorA = a.Color; ColorB = b.Color;
-    }
-
-    public double ManpowerA => Sum(SideA, false);
-    public double ManpowerB => Sum(SideB, false);
-    public double HpA => Sum(SideA, true);
-    public double HpB => Sum(SideB, true);
-
-    private static double Sum(List<Regiment> l, bool hp)
-    {
-        double s = 0.0;
-        for (int i = 0; i < l.Count; i++) s += hp ? l[i].TotalHp : l[i].Manpower;
-        return s;
-    }
+    public string province, occupier;
+    public float progressDays;
 }
+
+#endregion
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  COMBAT MANAGER  (global access: CombatManager.Instance)
-//
-//  Meeting  : enemy (at war) regiments standing in the same province -> Battle (+ BattleView card).
-//  Damage   : per tick, from the totals of each side (see RunBattle).
-//  Occupy   : a regiment occupies the province it stands in once no enemy fighter is left there (WarManager.Occupy).
-//             WarManager then also occupies neighbouring enemy province(s); those are filled completely with the mask.
-//  Trail    : while a regiment walks inside provinces it occupies, an overlay (nation color, alpha 0.6) is painted
-//             on the tiles it walked through.
-//  Reinforce: columns spawn at a safe province, walk to the front and merge into their regiment.
-//  War end  : battles of that war stop at once and the regiments walk back to the border (nearest own province).
+//  COMBAT MANAGER  (CombatManager.Instance)
+//  Fight   : hostile regiments inside each other's OUTER radius trade damage (Burst job);
+//            inside the INNER radius they collide: marching stops, the stronger side pushes the weaker back.
+//  Dice    : stateless, in the job (7 day roll, 6 day buff).
+//  Occupy  : idle regiment, no enemy in range -> daily siege progress divided by the province Defend.
+//  Reinforce: columns spawn in a safe province, walk to the front and merge.
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-650)]
-public partial class CombatManager : TickBehaviour
+public class CombatManager : TickBehaviour
 {
-    // ── singleton ──
+    #region Singleton
+
     private static CombatManager _instance;
     private static bool _quitting;
     public static bool HasInstance => _instance != null;
@@ -157,87 +109,66 @@ public partial class CombatManager : TickBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics() { _instance = null; _quitting = false; }
 
-    // ── settings ──
+    #endregion
+
+    #region Inspector & data
+
     public CombatSettings settings = new CombatSettings();
     [SerializeField] private MapManager map;
 
-    [Header("Battle card (screen space, uses the ArmyManager canvas)")]
-    [Tooltip("Logo of side A (the attacker). Tinted with the side's nation color.")]
-    [SerializeField] private Sprite attackLogo;
-    [Tooltip("Logo of side B (the defender). Tinted with the side's nation color.")]
-    [SerializeField] private Sprite defendLogo;
-    [Tooltip("Optional background sprite of the battle card.")]
-    [SerializeField] private Sprite backgroundSprite;
-    [Range(0.5f, 3f)] public float battleCardScale = 1.1f;
-
-    [Header("Virtual border (occupation trail)")]
-    [Tooltip("Radius in tiles of the painted trail around a walking army.")]
-    [Min(1)] public int trailRadiusTiles = 3;
+    [Header("Occupation overlay")]
     [Range(0f, 1f)] public float trailAlpha = 0.6f;
-    [Tooltip("Overlay texture max size (a 2048 map uses 2 tiles per pixel).")]
     [Min(128)] public int overlayMaxSize = 1024;
     public int overlaySortingOrder = 3;
 
-    [Header("Context menu helpers (right-click the component title)")]
-    [Tooltip("Nation id of A. -1 = random nation.")]
+    [Header("Context menu helpers")]
     [SerializeField] private int debugNationA = -1;
-    [Tooltip("Nation id of B. -1 = random nation.")]
     [SerializeField] private int debugNationB = -1;
-    [Tooltip("Regiment index of nation A. -1 = random free regiment.")]
     [SerializeField] private int debugRegiment = -1;
-    [Tooltip("Target province id. -1 = random province of nation B.")]
     [SerializeField] private int debugProvince = -1;
 
-    [Header("Inspector view (read-only mirror, Editor only)")]
-    [SerializeField] private bool showBattlesInInspector = true;
-    [SerializeField] private List<BattleInfo> battlesView = new List<BattleInfo>();
-    private float _nextInspectorRefresh;
+    [Header("Diagnostics (Editor only, throttled)")]
+    [SerializeField] private bool showDiagnostics = true;
+    [Min(0.25f)] public float diagnosticsInterval = 1f;
+    [SerializeField] private CombatDiagnostics diagnostics = new CombatDiagnostics();
+    [SerializeField] private List<SiegeInfo> siegesView = new List<SiegeInfo>();
+    private float _nextDiagnostics;
 
-    // ── data ──
-    private readonly List<Battle> _battles = new List<Battle>();
-    private readonly Dictionary<int, Battle> _battleAt = new Dictionary<int, Battle>();
+    private sealed class Siege
+    {
+        public int Nation;
+        public War War;
+        public bool Liberate;
+        public float Progress;
+    }
+
+    private readonly CombatBatch _batch = new CombatBatch();
+    private readonly List<Regiment> _units = new List<Regiment>(256);       // batch order
     private readonly Dictionary<int, List<Regiment>> _index = new Dictionary<int, List<Regiment>>();
     private readonly Stack<List<Regiment>> _listPool = new Stack<List<Regiment>>();
-    private readonly Dictionary<int, int> _occupier = new Dictionary<int, int>();     // province id -> occupier nation id
-    private readonly List<Battle> _tmpBattles = new List<Battle>();
-    private readonly List<Regiment> _tmpUnits = new List<Regiment>();
-    private readonly List<Regiment> _tmpCols = new List<Regiment>();
-    private readonly List<War> _tmpWars = new List<War>();
+    private readonly Dictionary<int, int> _occupier = new Dictionary<int, int>();
+    private readonly Dictionary<int, Siege> _sieges = new Dictionary<int, Siege>();
+    private readonly HashSet<int> _siegeSeen = new HashSet<int>();
+    private readonly List<int> _intBuf = new List<int>();
     private readonly Dictionary<int, long> _nextOccupier = new Dictionary<int, long>();
     private readonly Dictionary<Regiment, int> _hops = new Dictionary<Regiment, int>();
+    private readonly List<Regiment> _tmpCols = new List<Regiment>();
+    private readonly List<War> _tmpWars = new List<War>();
     private readonly List<War> _dayWars = new List<War>();
     private readonly List<Regiment> _staleBuf = new List<Regiment>();
     private readonly HashSet<int> _seenTargets = new HashSet<int>();
-    private BattleView _template;
-    private int _nextId = 1;
-    private float _detectAcc, _tickAcc;
 
-    // overlay
-    private Texture2D _tex;
-    private Sprite _sprite;
-    private GameObject _ovGo;
-    private Color32[] _px;
-    private int _ovW, _ovH, _ovScale;
-    private bool _dirty;
-
-    public IReadOnlyList<Battle> Battles => _battles;
-    public Sprite AttackLogo => attackLogo;
-    public Sprite DefendLogo => defendLogo;
-    public Sprite BackgroundSprite => backgroundSprite;
-    public string LastError { get; private set; }
-
-    public event Action<Battle> OnBattleStarted;
-    /// <summary>battle, winner (Attacker = side A, Defender = side B, None = draw / peace)</summary>
-    public event Action<Battle, WarSide> OnBattleEnded;
-    public event Action<Battle> OnDiceRolled;
+    private float _acc, _pendingDt, _reinforceAcc;
+    private int _reinforceCursor;
 
     protected override int TickPriority => -650;
 
-    private float _reinforceAcc; private int _reinforceCursor;
+    public string LastError { get; private set; }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  LIFECYCLE
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Lifecycle
+
     private void Awake()
     {
         if (_instance != null && _instance != this)
@@ -265,9 +196,8 @@ public partial class CombatManager : TickBehaviour
 #endif
         }
 
-        ArmyManager army = ArmyManager.Instance;
-        army.OnRegimentRetreat += HandleRetreat;
-        army.OnRegimentArrived += HandleArrived;
+        ArmyManager.Instance.OnRegimentRetreat += HandleRetreat;
+        ArmyManager.Instance.OnRegimentArrived += HandleArrived;
         WarManager wm = WarManager.Instance;
         wm.OnProvinceOccupationChanged += HandleOccupation;
         wm.OnProvinceOccupationSpread += HandleSpread;
@@ -285,11 +215,11 @@ public partial class CombatManager : TickBehaviour
     protected override void OnDisable()
     {
         base.OnDisable();
+        _batch.Complete();
         if (ArmyManager.HasInstance)
         {
             ArmyManager.Instance.OnRegimentRetreat -= HandleRetreat;
             ArmyManager.Instance.OnRegimentArrived -= HandleArrived;
-
         }
         if (WarManager.HasInstance)
         {
@@ -305,52 +235,34 @@ public partial class CombatManager : TickBehaviour
 
     private void OnDestroy()
     {
+        _batch.Dispose();
         DestroyOverlay();
-        if (_template != null) Destroy(_template.gameObject);
         if (_instance == this) _instance = null;
     }
 
-    /// <summary>Ends every battle without winner and forgets every occupation trail (map regenerated).</summary>
+    /// <summary>Forgets everything (map regenerated / nations cleared).</summary>
     public void ClearAll()
     {
-        _tmpBattles.Clear();
-        _tmpBattles.AddRange(_battles);
-        for (int i = 0; i < _tmpBattles.Count; i++) EndBattle(_tmpBattles[i], WarSide.None);
-        _battles.Clear();
-        _battleAt.Clear();
+        _batch.Complete();
+        _units.Clear();
         _index.Clear();
         _occupier.Clear();
-        _nextOccupier.Clear(); _hops.Clear();
         _sieges.Clear();
+        _nextOccupier.Clear();
+        _hops.Clear();
         DestroyOverlay();
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  TICK
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Tick (schedule) / LateUpdate (collect)
+
     public override void Tick(float deltaTime)
     {
         if (!ArmyManager.HasInstance || !WarManager.HasInstance) return;
 
-        _detectAcc += deltaTime;
-        if (_detectAcc >= Mathf.Max(0.05f, settings.detectInterval))
-        {
-            _detectAcc = 0f;
-            Detect();
-        }
-
-        if (_battles.Count > 0)
-        {
-            float step = Mathf.Max(0.02f, settings.stepInterval);
-            _tickAcc += deltaTime;
-            int guard = 0;
-            while (_tickAcc >= step && guard++ < 20)      // catches up at high game speed
-            {
-                _tickAcc -= step;
-                RunBattles(step);
-            }
-            if (guard >= 20) _tickAcc = 0f;
-        }
+        _acc += deltaTime;
+        if (!_batch.Pending && _acc >= Mathf.Max(0.02f, settings.combatInterval)) ScheduleCombat();
 
         if (settings.reinforcements)
         {
@@ -358,39 +270,81 @@ public partial class CombatManager : TickBehaviour
             if (_reinforceAcc >= settings.reinforceInterval) { _reinforceAcc = 0f; ReinforceAll(); }
         }
 
-        SiegeTick(deltaTime); SupportTick(deltaTime);
-
 #if UNITY_EDITOR
-        if (showBattlesInInspector && Time.unscaledTime >= _nextInspectorRefresh)
+        if (showDiagnostics && Time.unscaledTime >= _nextDiagnostics)
         {
-            _nextInspectorRefresh = Time.unscaledTime + 1f;
-            RefreshView();
+            _nextDiagnostics = Time.unscaledTime + Mathf.Max(0.25f, diagnosticsInterval);
+            RefreshDiagnostics();
         }
 #endif
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  DETECTION: who stands where, who meets whom
-    // ─────────────────────────────────────────────────────────────────────
-     private static bool IsFighter(Regiment r) =>
-     r.Military != null && r.State != RegimentState.Retreating && r.Manpower > 0.5;
-
-    private void RebuildIndex()
+    private void LateUpdate()
     {
+        if (_dirty && _tex != null)
+        {
+            _dirty = false;
+            _tex.SetPixelData(_px, 0);
+            _tex.Apply(false);
+        }
+        if (_batch.Pending) ApplyCombat();
+    }
+
+    private void ScheduleCombat()
+    {
+        ArmyManager army = ArmyManager.Instance;
+        WarManager wm = WarManager.Instance;
+        IReadOnlyList<Military> mils = army.Militaries;
+
+        float dt = Mathf.Min(_acc, 1f);
+        _acc = 0f;
+
+        // upper bound + nation capacity (ids are stable but not contiguous after removals)
+        int upper = 0;
+        for (int i = 0; i < mils.Count; i++) upper += mils[i].Regiments.Count + mils[i].Columns.Count;
+        int nationCap = 1;
+        IReadOnlyList<Nation> nations = WorldManager.Instance.Nations;
+        for (int i = 0; i < nations.Count; i++) if (nations[i].Id + 1 > nationCap) nationCap = nations[i].Id + 1;
+
+        _batch.Reserve(upper, nationCap);
+
+        // hostility matrix (wars are few)
+        _batch.ClearHostility();
+        IReadOnlyList<War> wars = wm.Wars;
+        for (int w = 0; w < wars.Count; w++)
+        {
+            War war = wars[w];
+            if (war.Ended) continue;
+            for (int a = 0; a < war.Attackers.Count; a++)
+                for (int d = 0; d < war.Defenders.Count; d++)
+                    _batch.SetHostile(war.Attackers[d < 0 ? 0 : a], war.Defenders[d]);
+        }
+
+        // units + province index
         foreach (var kv in _index) { kv.Value.Clear(); _listPool.Push(kv.Value); }
         _index.Clear();
+        _units.Clear();
 
-        IReadOnlyList<Military> mils = ArmyManager.Instance.Militaries;
+        float tile = army.TileSize;
         for (int i = 0; i < mils.Count; i++)
         {
             Military m = mils[i];
+            int nid = m.Nation.Id;
+            float atk = m.AttackPerMan.Value, def = m.DefendPerMan.Value, dmg = m.DamageMultiplier.Value;
+            float outer = m.OuterRadius.Value * tile;
+            float inner = Mathf.Min(m.InnerRadius.Value * tile, outer);
+
             for (int pass = 0; pass < 2; pass++)
             {
                 List<Regiment> regs = pass == 0 ? m.Regiments : m.Columns;
                 for (int j = 0; j < regs.Count; j++)
                 {
                     Regiment r = regs[j];
-                    if (!IsFighter(r)) continue;
+                    if (r.Military == null || r.State == RegimentState.Retreating || r.Manpower <= 0.5) continue;
+
+                    _batch.Set(_units.Count, r.WorldPosition, (float)r.Manpower, atk, def, dmg, outer, inner, nid, r.Uid);
+                    _units.Add(r);
+
                     Province p = r.CurrentProvince;
                     if (p == null) continue;
                     if (!_index.TryGetValue(p.Id, out List<Regiment> l))
@@ -402,173 +356,113 @@ public partial class CombatManager : TickBehaviour
                 }
             }
         }
+
+        if (_units.Count == 0) return;
+        _pendingDt = dt;
+        _batch.Schedule(_units.Count, (int)DateManager.Instance.TotalDays, dt, settings.damageScale,
+            settings.useDice, settings.diceBonus.Value, settings.diceRollDays, settings.diceBuffDays,
+            army.moveSpeedTiles * tile, settings.pushStartShare, Mathf.Max(settings.pushStartShare + 0.01f, settings.pushFullShare));
     }
+
+    private void ApplyCombat()
+    {
+        _batch.Complete();
+        ArmyManager army = ArmyManager.Instance;
+        float dt = _pendingDt;
+
+        for (int i = 0; i < _units.Count; i++)
+        {
+            Regiment r = _units[i];
+            if (r.Military == null) continue;
+
+            byte f = _batch.Flags(i);
+            r.InRange = (f & CombatBatch.FlagInRange) != 0;
+            r.InContact = (f & CombatBatch.FlagInContact) != 0;
+
+            Vector3 push = _batch.Push(i);
+            if (push.sqrMagnitude > 1e-8f) army.Nudge(r, push * dt);        // visible push
+
+            float hp = _batch.Hp(i);
+            if (hp <= 0f) continue;
+            r.LostHp += hp;
+            double per = Math.Max(1.0, r.Military.HpPerMan.Value);
+            if (r.LostHp < per) continue;
+            double men = Math.Floor(r.LostHp / per);
+            r.LostHp -= men * per;
+            r.TakeCasualties(men);                                          // may retreat / destroy it
+        }
+    }
+
+    #endregion
+
+    #region Queries
 
     private bool Hostile(Nation a, Nation b) =>
         a != null && b != null && a != b && WarManager.Instance.IsAtWar(a, b);
 
-
-    private void Detect()
+    /// <summary>True while a regiment of a war enemy is in range of another one inside this province.</summary>
+    public bool IsContested(Province p)
     {
-        RebuildIndex();
+        if (p == null || !_index.TryGetValue(p.Id, out List<Regiment> L)) return false;
+        for (int i = 0; i < L.Count; i++) if (L[i].InRange) return true;
+        return false;
+    }
 
-        // 1) start battles / let newcomers join
-        foreach (var kv in _index)
+    public bool IsInCombat(Regiment r) => r != null && (r.InRange || r.InContact);
+
+    /// <summary>Occupation progress of the province in days (0 = no siege).</summary>
+    public float GetSiegeProgress(Province p) =>
+        p != null && _sieges.TryGetValue(p.Id, out Siege s) ? s.Progress : 0f;
+
+    /// <summary>Nearest province of 'n' without enemy fighters or an enemy occupation.</summary>
+    public Province FindSafeProvince(Nation n, Vector3 from, Province exclude = null)
+    {
+        if (n == null || !ArmyManager.HasInstance) return null;
+        ArmyManager army = ArmyManager.Instance;
+        Province best = null;
+        float bestD = float.MaxValue;
+        for (int i = 0; i < n.Provinces.Count; i++)
         {
-            List<Regiment> L = kv.Value;
-            _battleAt.TryGetValue(kv.Key, out Battle b);
-            if (L.Count < 2 && b == null) continue;
+            Province p = n.Provinces[i];
+            if (p == exclude || !IsSafe(p, n)) continue;
+            float d = (army.ProvinceWorldPos(p) - from).sqrMagnitude;
+            if (d < bestD) { bestD = d; best = p; }
+        }
+        return best;
+    }
 
-            if (b == null)
-            {
-                Regiment atk = null, def = null;
-                for (int i = 0; i < L.Count && atk == null; i++)
-                    for (int j = i + 1; j < L.Count; j++)
-                    {
-                        if (!Hostile(L[i].Military.Nation, L[j].Military.Nation)) continue;
-                        if (L[j].State == RegimentState.Moving && L[i].State != RegimentState.Moving) { atk = L[j]; def = L[i]; }
-                        else { atk = L[i]; def = L[j]; }
-                        break;
-                    }
-                if (atk != null) b = StartBattle(atk.CurrentProvince, atk, def);
-            }
-
-            if (b == null) continue;
+    private bool IsSafe(Province p, Nation n)
+    {
+        if (_occupier.TryGetValue(p.Id, out int occ) && occ != n.Id) return false;
+        if (_index.TryGetValue(p.Id, out List<Regiment> L))
             for (int i = 0; i < L.Count; i++)
-                if (L[i].Battle == null && L[i].State != RegimentState.Fighting) TryJoin(b, L[i]);
-        }
+            {
+                Regiment u = L[i];
+                if (u.Military != null && Hostile(u.Military.Nation, n)) return false;
+            }
+        return true;
+    }
 
-        // 2) occupation when a regiment entered a new province
-        foreach (var kv in _index)
-        {
-            List<Regiment> L = kv.Value;
+    /// <summary>False while an enemy fighter (of that war) still stands in the province.</summary>
+    public bool CanTakeProvince(War w, Nation me, Province p)
+    {
+        if (w == null || me == null || p == null) return false;
+        WarSide mine = w.SideOf(me.Id);
+        if (_index.TryGetValue(p.Id, out List<Regiment> L))
             for (int i = 0; i < L.Count; i++)
             {
-                Regiment r = L[i];
-                if ((r.IsColumn && r.Role != ColumnRole.Occupy) || r.Military == null || r.State == RegimentState.Fighting) continue;
-                if (r.CheckedProvince == r.CurrentProvince) continue;
-                r.CheckedProvince = r.CurrentProvince;
-                TryOccupy(r);
+                Regiment u = L[i];
+                if (u.Military == null || u.State == RegimentState.Retreating || u.Manpower <= 0.5) continue;
+                if (u.CurrentProvince != p) continue;
+                WarSide s = w.SideOf(u.Military.Nation.Id);
+                if (s != WarSide.None && s != mine) return false;
             }
-        }
-
-        // 3) rear-guard columns that found no battle go home (their men return to the reserve)
-        IReadOnlyList<Military> mils = ArmyManager.Instance.Militaries;
-        for (int i = 0; i < mils.Count; i++)
-        {
-            List<Regiment> cols = mils[i].Columns;
-            for (int j = cols.Count - 1; j >= 0; j--)
-            {
-                Regiment c = cols[j];
-                if (c.State != RegimentState.Idle || c.Battle != null) continue;
-                if (c.Role == ColumnRole.Hold) mils[i].RemoveColumn(c);
-                else if (c.Role == ColumnRole.Occupy) AdvanceOccupier(mils[i], c);
-            }
-        }
+        return true;
     }
 
-    private Battle StartBattle(Province p, Regiment atk, Regiment def)
-    {
-        var b = new Battle(_nextId++, p, ArmyManager.Instance.ProvinceWorldPos(p),
-            atk.Military.Nation, def.Military.Nation);
-        b.SideA.Add(atk); b.SideB.Add(def);
-        atk.EnterFight(b); def.EnterFight(b);
-        _battles.Add(b);
-        _battleAt[p.Id] = b;
-        OnBattleStarted?.Invoke(b);
-        return b;
-    }
+    #endregion
 
-    private void TryJoin(Battle b, Regiment u)
-    {
-        Nation n = u.Military.Nation;
-        bool a = n == b.LeadA || (Hostile(n, b.LeadB) && !Hostile(n, b.LeadA));
-        bool d = n == b.LeadB || (Hostile(n, b.LeadA) && !Hostile(n, b.LeadB));
-        if (a == d) return;                               // neutral (or confusing): stays out
-        (a ? b.SideA : b.SideB).Add(u);
-        u.EnterFight(b);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  BATTLE ROUND
-    //   Totals: ATK = sum(men * ATK/man), DEF = sum(men * DEF/man), HP = sum(men * HP/man)
-    //   dmg to B = max(0, ATK_A - DEF_B)   dmg to A = max(0, ATK_B - DEF_A)
-    //   ATK_A <  DEF_B : both sides take +stalemateDamage
-    //   ATK_A >= DEF_B : dmg to B * (1 + bonus)
-    //   ATK_B >  DEF_A : dmg to A * (1 + bonus)
-    //   Every hpLostPerManpower HP lost = 1 manpower lost.
-    // ─────────────────────────────────────────────────────────────────────
-    private void RunBattles(float step)
-    {
-        _tmpBattles.Clear();
-        _tmpBattles.AddRange(_battles);
-        for (int i = 0; i < _tmpBattles.Count; i++)
-            if (!_tmpBattles[i].Ended) RunBattle(_tmpBattles[i], step);
-    }
-
-    private void RunBattle(Battle b, float step)
-    {
-        Prune(b.SideA); Prune(b.SideB);
-        if (b.SideA.Count == 0 || b.SideB.Count == 0 || !Hostile(b.LeadA, b.LeadB))
-        {
-            EndBattle(b, Winner(b));
-            return;
-        }
-
-        b.Ticks++;
-
-        if (settings.useDice && b.DiceDay != DateManager.Instance.TotalDays) RollDice(b);
-
-        Totals(b.SideA, out double atkA, out double defA, out double mulA);
-        Totals(b.SideB, out double atkB, out double defB, out double mulB);
-
-        double stale = settings.stalemateDamage.Value;
-        double bonus = 1.0 + settings.bonusDamage.Value;
-        double scale = step / Math.Max(0.05f, settings.tickInterval);   // fraction of a round
-
-        // ATK is reduced by the enemy DEF: effective = ATK * ATK / (ATK + DEF)
-        double toB = Effective(atkA, defB, bonus) * settings.damageScale + stale;
-        double toA = Effective(atkB, defA, bonus) * settings.damageScale + stale;
-
-        toB *= mulA * scale;
-        toA *= mulB * scale;
-
-        if (settings.useDice)
-        {
-            double dm = 1.0 + settings.diceDamageBonus.Value * b.DiceValue;
-            if (b.DiceSide == 1) toB *= dm;      // A got the dice: A hits harder
-            else toA *= dm;
-        }
-
-        ApplyDamage(b.SideB, toB);
-        ApplyDamage(b.SideA, toA);
-
-        Prune(b.SideA); Prune(b.SideB);
-        if (b.SideA.Count == 0 || b.SideB.Count == 0)
-        {
-            EndBattle(b, Winner(b));
-            return;
-        }
-
-        if (b.View != null) b.View.SetNumbers(b.ManpowerA, b.ManpowerB);
-    }
-
-    private static double Effective(double atk, double def, double bonus)
-    {
-        if (atk <= 0.0) return 0.0;
-        double eff = atk * atk / (atk + def);
-        return atk >= def ? eff * bonus : eff;     // bonus damage when ATK >= enemy DEF
-    }
-
-    private void RollDice(Battle b)
-    {
-        b.DiceDay = DateManager.Instance.TotalDays;
-        b.DiceSide = RNG.GetInt(0, 2) == 0 ? 1 : 2;      // 50 / 50
-        b.DiceValue = RNG.GetInt(1, 7);                  // 1..6
-        OnDiceRolled?.Invoke(b);
-
-        Nation lead = b.DiceSide == 1 ? b.LeadA : b.LeadB;
-    }
+    #region Reinforcement
 
     private void ReinforceAll()
     {
@@ -605,13 +499,14 @@ public partial class CombatManager : TickBehaviour
         }
         if (cols >= settings.maxColumnsPerRegiment) return false;
 
+        ArmyManager army = ArmyManager.Instance;
         double need = alloc - u.Manpower - incoming;
         double free = m.CurrentManpower - m.TotalRegimentManpower();
-        double men = Math.Min(Math.Min(need, free), alloc * settings.columnPercent / 100.0);
-        bool lastTopUp = men >= need - 0.5;                                  // allow a small final top-up
+        double men = Math.Min(Math.Min(need, free), Math.Min(alloc * settings.columnPercent / 100.0, army.ColumnCapMen));
+        bool lastTopUp = men >= need - 0.5;
         if (men < 1.0 || (men < settings.minColumnManpower && !lastTopUp)) return false;
 
-        Province exclude = u.State == RegimentState.Fighting ? u.Province : null;
+        Province exclude = u.InRange ? u.Province : null;
         Province from = FindSafeProvince(m.Nation, u.WorldPosition, exclude);
         if (from == null) return false;
 
@@ -620,161 +515,141 @@ public partial class CombatManager : TickBehaviour
         column.Role = ColumnRole.Merge;
         column.MergeTarget = u;
         Province dest = u.LocationProvince ?? u.Province;
-        if (!ArmyManager.Instance.MoveRegiment(column, dest)) { m.RemoveColumn(column); return false; }
+        if (!army.MoveRegiment(column, dest)) { m.RemoveColumn(column); return false; }
         return true;
     }
 
-    private static WarSide Winner(Battle b)
+    /// <summary>A main regiment retreats: its columns follow it.</summary>
+    private void HandleRetreat(Regiment r, Province target)
     {
-        if (b.SideA.Count > 0 && b.SideB.Count == 0) return WarSide.Attacker;
-        if (b.SideB.Count > 0 && b.SideA.Count == 0) return WarSide.Defender;
-        return WarSide.None;
-    }
-
-    private static void Prune(List<Regiment> side)
-    {
-        for (int i = side.Count - 1; i >= 0; i--)
-        {
-            Regiment u = side[i];
-            if (u.Military == null || u.State != RegimentState.Fighting || u.Manpower <= 0.5) side.RemoveAt(i);
-        }
-    }
-
-    private static void Totals(List<Regiment> side, out double atk, out double def, out double mul)
-    {
-        atk = def = 0.0;
-        double men = 0.0, m = 0.0;
-        for (int i = 0; i < side.Count; i++)
-        {
-            Regiment u = side[i];
-            Military mil = u.Military;
-            double man = u.Manpower;
-            atk += man * mil.AttackPerMan.Value;
-            def += man * mil.DefendPerMan.Value;
-            m += man * mil.DamageMultiplier.Value;
-            men += man;
-        }
-        mul = men > 0.0 ? m / men : 1.0;
-    }
-
-    private void ApplyDamage(List<Regiment> side, double hp)
-    {
-        if (hp <= 0.0 || side.Count == 0) return;
-        _tmpUnits.Clear();
-        _tmpUnits.AddRange(side);
-
-        double total = 0.0;
-        for (int i = 0; i < _tmpUnits.Count; i++) total += _tmpUnits[i].Manpower;
-        if (total <= 0.0) return;
-
-        double per = Math.Max(1.0, settings.hpLostPerManpower);
-        for (int i = 0; i < _tmpUnits.Count; i++)
-        {
-            Regiment u = _tmpUnits[i];
-            if (u.Military == null) continue;
-            u.LostHp += hp * (u.Manpower / total);
-            if (u.LostHp < per) continue;
-            double men = Math.Floor(u.LostHp / per);
-            u.LostHp -= men * per;
-            u.TakeCasualties(men);              // may retreat / destroy it
-        }
-    }
-
-    private void EndBattle(Battle b, WarSide winner)
-    {
-        if (b == null || b.Ended) return;
-        b.Ended = true;
-        _battles.Remove(b);
-        _battleAt.Remove(b.Province.Id);
-        ReleaseView(b);
+        Military m = r.Military;
+        if (m == null || r.IsColumn) return;
 
         ArmyManager army = ArmyManager.Instance;
-        for (int pass = 0; pass < 2; pass++)
-        {
-            List<Regiment> side = pass == 0 ? b.SideA : b.SideB;
-            for (int i = 0; i < side.Count; i++)
-            {
-                Regiment u = side[i];
-                if (u.Military == null || u.State != RegimentState.Fighting) { u.Battle = null; continue; }
-                u.LeaveFight();
-                if (u.State == RegimentState.Moving) army.TrackMoving(u);   // continue its march
-            }
-        }
+        _tmpCols.Clear();
+        for (int i = 0; i < m.Columns.Count; i++)
+            if (m.Columns[i].Role == ColumnRole.Merge && m.Columns[i].MergeTarget == r) _tmpCols.Add(m.Columns[i]);
 
-        if (winner != WarSide.None)
-        {
-            List<Regiment> win = winner == WarSide.Attacker ? b.SideA : b.SideB;
-            for (int i = 0; i < win.Count; i++) TryOccupy(win[i]);
-        }
-
-        OnBattleEnded?.Invoke(b, winner);
+        for (int i = 0; i < _tmpCols.Count; i++)
+            if (target == null || !army.MoveRegiment(_tmpCols[i], target)) m.RemoveColumn(_tmpCols[i]);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  WAR ENDED: stop its battles, armies walk back to the border
-    // ─────────────────────────────────────────────────────────────────────
-    private void HandleWarEnded(War w, WarResult result)
+    private void HandleArrived(Regiment r)
     {
-        if (w == null || !ArmyManager.HasInstance) return;
+        if (r.Military == null || !r.IsColumn) return;
+        if (r.Role == ColumnRole.Hold || r.Role == ColumnRole.Occupy) return;
 
-        EndSiegesOf(w);
+        Military m = r.Military;
+        Regiment t = r.MergeTarget;
+        if (t == null || t.Military != m) { m.RemoveColumn(r); return; }
 
-        // 1) battles between the two sides of this war stop now (unless the nations still fight in another war).
-        //    A private list: this can run while RunBattles / Detect are iterating their own lists.
-        var ending = new List<Battle>();
-        for (int i = 0; i < _battles.Count; i++)
-        {
-            Battle b = _battles[i];
-            WarSide sa = w.SideOf(b.LeadA.Id), sb = w.SideOf(b.LeadB.Id);
-            if (sa != WarSide.None && sb != WarSide.None && sa != sb && !Hostile(b.LeadA, b.LeadB)) ending.Add(b);
-        }
-        for (int i = 0; i < ending.Count; i++) EndBattle(ending[i], WarSide.None);
-
-        DropOccupiers(w.Attackers);
-        DropOccupiers(w.Defenders);
-
-        // 2) armies go home
-        if (!settings.returnToBorderAfterWar) return;
-        ReturnToBorder(w, w.Attackers);
-        ReturnToBorder(w, w.Defenders);
-    }
-
-    private void ReturnToBorder(War w, List<int> members)
-    {
         ArmyManager army = ArmyManager.Instance;
-        for (int m = 0; m < members.Count; m++)
+        float radius = settings.mergeRadiusTiles * army.TileSize;
+        bool near = (t.CurrentProvince != null && t.CurrentProvince == r.CurrentProvince) ||
+                    (t.WorldPosition - r.WorldPosition).sqrMagnitude <= radius * radius;
+
+        if (near)
         {
-            Nation n = WorldManager.Instance.GetNation(members[m]);
-            Military mil = n != null ? army.GetMilitary(n) : null;
-            if (mil == null) continue;
-
-            for (int i = 0; i < mil.Regiments.Count; i++)
-            {
-                Regiment r = mil.Regiments[i];
-                if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) continue;   // retreating ones already go to a safe province
-
-                Province here = r.CurrentProvince ?? r.Province;
-                bool inEnemyLand = MustLeave(w, n, here);
-                bool headingToEnemyLand = r.State == RegimentState.Moving && MustLeave(w, n, r.Destination);
-                if (!inEnemyLand && !headingToEnemyLand) continue;
-
-                Province home = FindSafeProvince(n, r.WorldPosition, null);   // nearest own province = the border
-                if (home == null) continue;
-                army.MoveRegiment(r, home);
-            }
+            double room = Math.Max(0.0, t.Allocation - t.Manpower);
+            t.Manpower += Math.Min(r.Manpower, room);                 // the rest stays in the reserve
+            t.RefreshText();
+            m.RemoveColumn(r);
         }
+        else if (!army.MoveRegiment(r, t.LocationProvince)) m.RemoveColumn(r);
     }
+
+    #endregion
+
+    #region Occupation (siege) + occupation columns
 
     private void HandleDay()
     {
-        if (_hops.Count > 0)                                   // forget columns that no longer exist
+        if (_hops.Count > 0)
         {
             _staleBuf.Clear();
             foreach (var kv in _hops) if (kv.Key.Military == null) _staleBuf.Add(kv.Key);
             for (int i = 0; i < _staleBuf.Count; i++) _hops.Remove(_staleBuf[i]);
         }
+        if (!ArmyManager.HasInstance || !WarManager.HasInstance) return;
 
-        if (!settings.occupationColumns || !ArmyManager.HasInstance || !WarManager.HasInstance) return;
+        SiegeDay();
+        if (!settings.occupationColumns) return;
+        SpawnOccupiersDay();
+        AdvanceOccupiersDay();
+    }
+
+    /// <summary>Daily: idle regiments with no enemy in range push the occupation progress of the province they stand in.</summary>
+    private void SiegeDay()
+    {
+        WarManager wm = WarManager.Instance;
+        IReadOnlyList<Military> mils = ArmyManager.Instance.Militaries;
+        _siegeSeen.Clear();
+
+        for (int i = 0; i < mils.Count; i++)
+        {
+            Military m = mils[i];
+            Nation me = m.Nation;
+            IReadOnlyList<War> wars = wm.GetWars(me);
+            if (wars.Count == 0) continue;
+
+            for (int pass = 0; pass < 2; pass++)
+            {
+                List<Regiment> regs = pass == 0 ? m.Regiments : m.Columns;
+                for (int j = 0; j < regs.Count; j++)
+                {
+                    Regiment r = regs[j];
+                    if (r.Military == null || r.Manpower <= 0.5) continue;
+                    if (r.IsColumn && r.Role != ColumnRole.Occupy) continue;
+                    if (r.State == RegimentState.Moving || r.State == RegimentState.Retreating) continue;
+                    if (r.InRange || r.InContact) continue;                     // fight first
+
+                    Province p = r.CurrentProvince ?? r.Province;
+                    if (p == null || p.Owner == null || _siegeSeen.Contains(p.Id)) continue;
+
+                    _tmpWars.Clear();
+                    for (int w = 0; w < wars.Count; w++) _tmpWars.Add(wars[w]);
+                    for (int w = 0; w < _tmpWars.Count; w++)
+                    {
+                        War war = _tmpWars[w];
+                        if (war.Ended) continue;
+                        WarSide mine = war.SideOf(me.Id), os = war.SideOf(p.Owner.Id);
+                        if (mine == WarSide.None || os == WarSide.None) continue;
+
+                        bool liberate;
+                        if (os != mine) { if (war.Occupied.TryGetValue(p.Id, out int cur) && war.SideOf(cur) == mine) continue; liberate = false; }
+                        else if (war.Occupied.TryGetValue(p.Id, out int occ) && war.SideOf(occ) != mine) liberate = true;
+                        else continue;
+
+                        if (!CanTakeProvince(war, me, p)) continue;
+
+                        _siegeSeen.Add(p.Id);
+                        if (!_sieges.TryGetValue(p.Id, out Siege s) || s.Nation != me.Id || s.War != war || s.Liberate != liberate)
+                        {
+                            s = new Siege { Nation = me.Id, War = war, Liberate = liberate };
+                            _sieges[p.Id] = s;
+                        }
+
+                        // progress per day = 1 / (1 + Defend / divisor): strong defence = slower siege
+                        s.Progress += 1f / (1f + Mathf.Max(0f, p.Defend.Value) / Mathf.Max(0.01f, settings.defendDivisor));
+                        if (s.Progress >= settings.occupyDays)
+                        {
+                            _sieges.Remove(p.Id);
+                            if (liberate) wm.Liberate(war, p); else wm.Occupy(war, me, p);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // sieges nobody pushed today are lost
+        _intBuf.Clear();
+        foreach (var kv in _sieges) if (!_siegeSeen.Contains(kv.Key)) _intBuf.Add(kv.Key);
+        for (int i = 0; i < _intBuf.Count; i++) _sieges.Remove(_intBuf[i]);
+    }
+
+    private void SpawnOccupiersDay()
+    {
         WarManager wm = WarManager.Instance;
         if (wm.Wars.Count == 0) return;
 
@@ -809,8 +684,8 @@ public partial class CombatManager : TickBehaviour
         for (int i = 0; i < m.Columns.Count; i++) if (m.Columns[i].Role == ColumnRole.Occupy) active++;
         if (active >= settings.maxOccupiersPerNation) return false;
 
-        double men = Math.Max(settings.occupierMinManpower, army.manpowerPerRegiment * settings.occupierPercent / 100.0);
-        if (m.CurrentManpower - m.TotalRegimentManpower() < men) return false;      // no spare men
+        double men = Math.Min(army.ColumnCapMen, Math.Max(settings.occupierMinManpower, army.manpowerPerRegiment * settings.occupierPercent / 100.0));
+        if (m.CurrentManpower - m.TotalRegimentManpower() < men) return false;
 
         Vector3 refPos = n.Capital != null ? army.ProvinceWorldPos(n.Capital) : Vector3.zero;
         Province target = PickOccupyTarget(w, n, m, refPos, out _);
@@ -826,7 +701,45 @@ public partial class CombatManager : TickBehaviour
         return true;
     }
 
-    /// <summary>Nearest free enemy province next to our land or to land our side holds.</summary>
+    /// <summary>Idle occupation columns stay while their siege runs, then walk on or go home.</summary>
+    private void AdvanceOccupiersDay()
+    {
+        IReadOnlyList<Military> mils = ArmyManager.Instance.Militaries;
+        for (int i = 0; i < mils.Count; i++)
+        {
+            Military m = mils[i];
+            for (int j = m.Columns.Count - 1; j >= 0; j--)
+            {
+                Regiment c = m.Columns[j];
+                if (c.Role != ColumnRole.Occupy || c.State != RegimentState.Idle || c.InRange || c.InContact) continue;
+                Province here = c.CurrentProvince ?? c.Province;
+                if (here != null && _sieges.TryGetValue(here.Id, out Siege s) && s.Nation == m.Nation.Id) continue;
+                AdvanceOccupier(m, c);
+            }
+        }
+    }
+
+    private void AdvanceOccupier(Military m, Regiment c)
+    {
+        Nation n = m.Nation;
+        if (!WarManager.Instance.IsAtWar(n)) { _hops.Remove(c); m.RemoveColumn(c); return; }
+
+        IReadOnlyList<War> wars = WarManager.Instance.GetWars(n);
+        _hops.TryGetValue(c, out int hops);
+        Province next = null;
+        float bestD = float.MaxValue;
+        if (hops < settings.occupierMaxHops)
+            for (int i = 0; i < wars.Count; i++)
+            {
+                Province t = PickOccupyTarget(wars[i], n, m, c.WorldPosition, out float d);
+                if (t != null && d < bestD) { bestD = d; next = t; }
+            }
+
+        if (next != null && ArmyManager.Instance.MoveRegiment(c, next)) { _hops[c] = hops + 1; return; }
+        _hops.Remove(c);
+        m.RemoveColumn(c);
+    }
+
     private Province PickOccupyTarget(War w, Nation n, Military m, Vector3 refPos, out float dist)
     {
         dist = float.MaxValue;
@@ -852,9 +765,9 @@ public partial class CombatManager : TickBehaviour
         {
             Province q = map.GetProvince(nb[i]);
             if (q == null || q.Owner == null || !_seenTargets.Add(q.Id)) continue;
-            if (w.SideOf(q.Owner.Id) != War.Opposite(mine)) continue;     // only enemy land
-            if (w.Occupied.ContainsKey(q.Id)) continue;                   // already claimed
-            if (IsTargeted(m, q) || !CanTakeProvince(w, n, q)) continue;  // another column is going / defenders stand there
+            if (w.SideOf(q.Owner.Id) != War.Opposite(mine)) continue;
+            if (w.Occupied.ContainsKey(q.Id)) continue;
+            if (IsTargeted(m, q)) continue;
             float d = (ArmyManager.Instance.ProvinceWorldPos(q) - refPos).sqrMagnitude;
             if (d < bestD) { bestD = d; best = q; }
         }
@@ -870,30 +783,61 @@ public partial class CombatManager : TickBehaviour
         return false;
     }
 
-    /// <summary>An idle occupation column claims where it stands, then walks to the next free province or goes home.</summary>
-    private void AdvanceOccupier(Military m, Regiment c)
+    private void HandleOccupation(War w, Province p, Nation occupier)
     {
-        Nation n = m.Nation;
-        if (!WarManager.Instance.IsAtWar(n)) { _hops.Remove(c); m.RemoveColumn(c); return; }
+        if (p == null) return;
+        if (_occupier.TryGetValue(p.Id, out int old) && (occupier == null || old != occupier.Id)) ClearProvincePixels(p);
 
-        TryOccupy(c);
-        if (c.Military == null || c.State != RegimentState.Idle || c.Battle != null) return;
+        if (occupier != null) { _occupier[p.Id] = occupier.Id; PaintProvince(p, occupier); }
+        else _occupier.Remove(p.Id);
+    }
 
-        IReadOnlyList<War> wars = WarManager.Instance.GetWars(n);
-        _hops.TryGetValue(c, out int hops);
-        Province next = null;
-        float bestD = float.MaxValue;
-        if (hops < settings.occupierMaxHops)
-            for (int i = 0; i < wars.Count; i++)
+    private void HandleSpread(War w, Province p, Nation occupier) => PaintProvince(p, occupier);
+
+    #endregion
+
+    #region War ended
+
+    private void HandleWarEnded(War w, WarResult result)
+    {
+        if (w == null || !ArmyManager.HasInstance) return;
+
+        _intBuf.Clear();
+        foreach (var kv in _sieges) if (kv.Value.War == w) _intBuf.Add(kv.Key);
+        for (int i = 0; i < _intBuf.Count; i++) _sieges.Remove(_intBuf[i]);
+
+        DropOccupiers(w.Attackers);
+        DropOccupiers(w.Defenders);
+
+        // fighting stops by itself: the hostility matrix is rebuilt on the next combat step
+        if (!settings.returnToBorderAfterWar) return;
+        ReturnToBorder(w, w.Attackers);
+        ReturnToBorder(w, w.Defenders);
+    }
+
+    private void ReturnToBorder(War w, List<int> members)
+    {
+        ArmyManager army = ArmyManager.Instance;
+        for (int m = 0; m < members.Count; m++)
+        {
+            Nation n = WorldManager.Instance.GetNation(members[m]);
+            Military mil = n != null ? army.GetMilitary(n) : null;
+            if (mil == null) continue;
+
+            for (int i = 0; i < mil.Regiments.Count; i++)
             {
-                Province t = PickOccupyTarget(wars[i], n, m, c.WorldPosition, out float d);
-                if (t != null && d < bestD) { bestD = d; next = t; }
+                Regiment r = mil.Regiments[i];
+                if (r.State == RegimentState.Retreating) continue;
+
+                Province here = r.CurrentProvince ?? r.Province;
+                bool inEnemyLand = MustLeave(w, n, here);
+                bool heading = r.State == RegimentState.Moving && MustLeave(w, n, r.Destination);
+                if (!inEnemyLand && !heading) continue;
+
+                Province home = FindSafeProvince(n, r.WorldPosition, null);
+                if (home != null) army.MoveRegiment(r, home);
             }
-
-        if (next != null && ArmyManager.Instance.MoveRegiment(c, next)) { _hops[c] = hops + 1; return; }
-
-        _hops.Remove(c);
-        m.RemoveColumn(c);                                   // its men return to the reserve
+        }
     }
 
     private void DropOccupiers(List<int> members)
@@ -903,194 +847,31 @@ public partial class CombatManager : TickBehaviour
         {
             Nation n = WorldManager.Instance.GetNation(members[k]);
             Military m = n != null ? army.GetMilitary(n) : null;
-            if (m == null || WarManager.Instance.IsAtWar(n)) continue;      // still fighting elsewhere
+            if (m == null || WarManager.Instance.IsAtWar(n)) continue;
             for (int j = m.Columns.Count - 1; j >= 0; j--)
                 if (m.Columns[j].Role == ColumnRole.Occupy) { _hops.Remove(m.Columns[j]); m.RemoveColumn(m.Columns[j]); }
         }
     }
 
-    /// <summary>True when p belongs to a nation that was on the opposite side of the ended war and 'me' is not at war with it any more.</summary>
     private bool MustLeave(War w, Nation me, Province p)
     {
         if (p == null || p.Owner == null || p.Owner == me) return false;
         WarSide mine = w.SideOf(me.Id), os = w.SideOf(p.Owner.Id);
         if (mine == WarSide.None || os == WarSide.None || os == mine) return false;
-        return !Hostile(me, p.Owner);       // still at war with the owner in another war: stay
+        return !Hostile(me, p.Owner);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  REINFORCEMENT
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
 
-    /// <summary>A main regiment starts retreating: its columns split (holdSplit hold the enemy, the rest follow it).</summary>
-    private void HandleRetreat(Regiment r, Province target)
-    {
-        Military m = r.Military;
-        if (m == null || r.IsColumn) return;
+    #region Occupation overlay (painted per province)
 
-        ArmyManager army = ArmyManager.Instance;
-        Province site = r.Province;                                   // still the battle province
-        _tmpCols.Clear();
-        for (int i = 0; i < m.Columns.Count; i++)
-            if (m.Columns[i].Role == ColumnRole.Merge && m.Columns[i].MergeTarget == r) _tmpCols.Add(m.Columns[i]);
+    private Texture2D _tex;
+    private Sprite _sprite;
+    private GameObject _ovGo;
+    private Color32[] _px;
+    private int _ovW, _ovH, _ovScale;
+    private bool _dirty;
 
-        for (int i = 0; i < _tmpCols.Count; i++)
-        {
-            Regiment c = _tmpCols[i];
-            double hold = c.Manpower * settings.holdSplit;
-            if (hold >= 1.0 && c.Manpower - hold >= 1.0 && site != null)
-            {
-                Regiment h = m.AddColumn(c.CurrentProvince ?? c.Province, hold);
-                if (h != null)
-                {
-                    h.Teleport(c.WorldPosition);
-                    h.CurrentProvince = c.CurrentProvince;
-                    h.Role = ColumnRole.Hold;
-                    if (army.MoveRegiment(h, site)) c.Manpower -= hold;
-                    else m.RemoveColumn(h);
-                }
-            }
-            if (target == null || !army.MoveRegiment(c, target)) m.RemoveColumn(c);   // the rest chases the retreating regiment
-        }
-    }
-
-    private void HandleArrived(Regiment r)
-    {
-        if (r.Military == null || !r.IsColumn) return;
-        if (r.Role == ColumnRole.Hold || r.Role == ColumnRole.Occupy) return;
-
-        Military m = r.Military;
-        Regiment t = r.MergeTarget;
-        if (t == null || t.Military != m) { m.RemoveColumn(r); return; }
-
-        ArmyManager army = ArmyManager.Instance;
-        float radius = settings.mergeRadiusTiles * army.TileSize;
-        bool near = (t.CurrentProvince != null && t.CurrentProvince == r.CurrentProvince) ||
-                    (t.WorldPosition - r.WorldPosition).sqrMagnitude <= radius * radius;
-
-        if (near)
-        {
-            double room = Math.Max(0.0, t.Allocation - t.Manpower);
-            t.Manpower += Math.Min(r.Manpower, room);                 // the rest stays in the reserve
-            t.RefreshText();
-            m.RemoveColumn(r);
-        }
-        else if (!army.MoveRegiment(r, t.LocationProvince)) m.RemoveColumn(r);   // chase it
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  SAFE PROVINCES / OCCUPATION RULES
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// <summary>Nearest province of 'n' without a battle, enemy fighters or an enemy occupation.</summary>
-    public Province FindSafeProvince(Nation n, Vector3 from, Province exclude = null)
-    {
-        if (n == null || !ArmyManager.HasInstance) return null;
-        ArmyManager army = ArmyManager.Instance;
-        Province best = null;
-        float bestD = float.MaxValue;
-        for (int i = 0; i < n.Provinces.Count; i++)
-        {
-            Province p = n.Provinces[i];
-            if (p == exclude || !IsSafe(p, n)) continue;
-            float d = (army.ProvinceWorldPos(p) - from).sqrMagnitude;
-            if (d < bestD) { bestD = d; best = p; }
-        }
-        return best;
-    }
-
-    private bool IsSafe(Province p, Nation n)
-    {
-        if (_battleAt.ContainsKey(p.Id)) return false;
-        if (_occupier.TryGetValue(p.Id, out int occ) && occ != n.Id) return false;
-        if (_index.TryGetValue(p.Id, out List<Regiment> L))
-            for (int i = 0; i < L.Count; i++)
-            {
-                Regiment u = L[i];
-                if (u.Military != null && u.State != RegimentState.Retreating && Hostile(u.Military.Nation, n)) return false;
-            }
-        return true;
-    }
-
-    /// <summary>False while a battle runs in the province or an enemy fighter (of that war) still stands there.</summary>
-    public bool CanTakeProvince(War w, Nation me, Province p)
-    {
-        if (w == null || me == null || p == null) return false;
-        if (_battleAt.ContainsKey(p.Id)) return false;
-        if (SiegeBlocks(w, me, p)) return false;
-
-        WarSide mine = w.SideOf(me.Id);
-        if (_index.TryGetValue(p.Id, out List<Regiment> L))
-            for (int i = 0; i < L.Count; i++)
-            {
-                Regiment u = L[i];
-                if (u.Military == null || u.State == RegimentState.Retreating || u.Manpower <= 0.5) continue;
-                if (u.CurrentProvince != p) continue;
-                WarSide s = w.SideOf(u.Military.Nation.Id);
-                if (s != WarSide.None && s != mine) return false;
-            }
-        return true;
-    }
-
-    /// <summary>The regiment occupies the province it stands in (enemy land) or liberates it (own side's land held by the enemy).</summary>
-    internal bool TryOccupy(Regiment r)
-    {
-        if (r == null || r.Military == null) return false;
-        if (r.IsColumn && r.Role != ColumnRole.Occupy) return false;   // merge / hold columns never occupy
-        if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) return false;
-
-        Province p = r.CurrentProvince ?? r.Province;
-        if (p == null || p.Owner == null) return false;
-
-        WarManager wm = WarManager.Instance;
-        Nation me = r.Military.Nation;
-        _tmpWars.Clear();
-        IReadOnlyList<War> wars = wm.GetWars(me);
-        for (int i = 0; i < wars.Count; i++) _tmpWars.Add(wars[i]);
-
-        for (int i = 0; i < _tmpWars.Count; i++)
-        {
-            War w = _tmpWars[i];
-            if (w.Ended) continue;
-            WarSide mine = w.SideOf(me.Id), ownerSide = w.SideOf(p.Owner.Id);
-            if (mine == WarSide.None || ownerSide == WarSide.None) continue;
-            if (!CanTakeProvince(w, me, p)) continue;
-
-            if (ownerSide != mine)
-            {
-                if (w.Occupied.TryGetValue(p.Id, out int cur) && w.SideOf(cur) == mine) continue;
-                if (wm.Occupy(w, me, p)) return true;
-            }
-            else if (w.Occupied.TryGetValue(p.Id, out int occ) && w.SideOf(occ) != mine)
-            {
-                if (wm.Liberate(w, p)) return true;
-            }
-        }
-        return false;
-    }
-
-    private void HandleOccupation(War w, Province p, Nation occupier)
-    {
-        if (p == null) return;
-        if (_occupier.TryGetValue(p.Id, out int old) && (occupier == null || old != occupier.Id)) ClearProvincePixels(p);
-
-        if (occupier != null)
-        {
-            _occupier[p.Id] = occupier.Id;
-            PaintProvince(p, occupier);        // the whole province, no holes
-        }
-        else _occupier.Remove(p.Id);
-    }
-
-    /// <summary>A neighbour occupied together with a walked-into province: no army walked there, so the whole province gets the mask.</summary>
-    private void HandleSpread(War w, Province p, Nation occupier)
-    {
-        PaintProvince(p, occupier);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  VIRTUAL BORDER (overlay painted along the walked path)
-    // ─────────────────────────────────────────────────────────────────────
     private void BuildOverlay()
     {
         DestroyOverlay();
@@ -1125,7 +906,6 @@ public partial class CombatManager : TickBehaviour
         _sprite = null; _tex = null; _ovGo = null; _px = null; _dirty = false;
     }
 
-    /// <summary>Fills EVERY tile of the province with the nation color (used for provinces occupied by spread).</summary>
     private void PaintProvince(Province p, Nation n)
     {
         if (_px == null || map == null || p == null || n == null || p.Tiles == null) return;
@@ -1152,100 +932,22 @@ public partial class CombatManager : TickBehaviour
         _dirty = true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  BATTLE CARDS: world position -> screen position (LateUpdate)
-    // ─────────────────────────────────────────────────────────────────────
-    private void LateUpdate()
-    {
-        if (_dirty && _tex != null)
-        {
-            _dirty = false;
-            _tex.SetPixelData(_px, 0);
-            _tex.Apply(false);
-        }
+    #endregion
 
-        if (_battles.Count == 0 || !ArmyManager.HasInstance) return;
-        ArmyManager army = ArmyManager.Instance;
-        bool zoomOk = army.CardsVisibleAtZoom();
+    #region Context menu & diagnostics
 
-        for (int i = 0; i < _battles.Count; i++)
-        {
-            Battle b = _battles[i];
-            Vector2 local = default;
-            if (!zoomOk || !army.WorldToUi(b.WorldPos, out local)) { ReleaseView(b); continue; }
-            if (b.View == null && !AcquireView(b, army)) continue;
-            b.View.SetLocalPosition(local);
-        }
-    }
-
-    private bool AcquireView(Battle b, ArmyManager army)
-    {
-        RectTransform root = army.GetRoot();
-        if (root == null) return false;
-        BattleView v = PoolManager.Instance.Spawn(GetTemplate(), Vector3.zero, Quaternion.identity, root);
-        if (v == null) return false;
-        v.transform.localRotation = Quaternion.identity;
-        v.transform.localScale = Vector3.one;
-        b.View = v;
-        v.Bind(b, this, army);
-        return true;
-    }
-
-    private void ReleaseView(Battle b)
-    {
-        BattleView v = b.View;
-        if (v == null) return;
-        b.View = null;
-        if (PoolManager.HasInstance) PoolManager.Instance.Despawn(v.gameObject);
-        else Destroy(v.gameObject);
-    }
-
-    private BattleView GetTemplate()
-    {
-        if (_template != null) return _template;
-        var go = new GameObject("BattleView (template)", typeof(RectTransform));
-        go.SetActive(false);
-        go.transform.SetParent(transform, false);
-        _template = go.AddComponent<BattleView>();
-        return _template;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  QUERIES / FORCE
-    // ─────────────────────────────────────────────────────────────────────
-    public Battle GetBattle(Province p) => p != null && _battleAt.TryGetValue(p.Id, out Battle b) ? b : null;
-    public bool IsInBattle(Regiment r) => r != null && r.Battle != null && !r.Battle.Ended;
-
-    /// <summary>Forces the end of a battle (no winner: everybody stays where they are).</summary>
-    public void EndAllBattles()
-    {
-        _tmpBattles.Clear();
-        _tmpBattles.AddRange(_battles);
-        for (int i = 0; i < _tmpBattles.Count; i++) EndBattle(_tmpBattles[i], WarSide.None);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  CONTEXT MENU  (declare the war first: War: FORCE Declare War)
-    //   -1 = RANDOM nation / regiment / province.
-    // ─────────────────────────────────────────────────────────────────────
     [ContextMenu("Combat: Send Regiment (A) to Province (debugProvince / random province of B)")]
     private void MenuSend() => RunSend(false);
 
     [ContextMenu("Combat: Send ALL regiments of A to Province (debugProvince / random province of B)")]
     private void MenuSendAll() => RunSend(true);
 
-    [ContextMenu("Combat: End All Battles (no winner)")]
-    private void MenuEndAll() { EndAllBattles(); RefreshView(); Debug.Log("[Combat] All battles ended."); }
-
-    [ContextMenu("Combat: Log Battles")]
+    [ContextMenu("Combat: Log")]
     private void MenuLog()
     {
-        if (_battles.Count == 0) Debug.Log("[Combat] No battles.");
-        for (int i = 0; i < _battles.Count; i++)
-        {
-            Battle b = _battles[i];
-            Debug.Log($"[Combat] #{b.Id} {b.Province.Name}: {b.LeadA.Name} {b.ManpowerA:N0} vs {b.LeadB.Name} {b.ManpowerB:N0} (tick {b.Ticks})");
-        }
+        int r = 0, c = 0;
+        for (int i = 0; i < _units.Count; i++) { if (_units[i].InRange) r++; if (_units[i].InContact) c++; }
+        Debug.Log($"[Combat] units {_units.Count}, in range {r}, in contact {c}, sieges {_sieges.Count}");
     }
 
     [ContextMenu("Combat: Clear Occupation Overlay")]
@@ -1266,13 +968,11 @@ public partial class CombatManager : TickBehaviour
         Military m = a.GetMilitary();
         if (m == null || m.Regiments.Count == 0) { Debug.LogWarning("[Combat] Nation A has no regiments."); return; }
 
-        // target: debugProvince, or a RANDOM province of B (not the capital)
         Province dest = null;
         if (debugProvince >= 0 && map != null) dest = map.GetProvince(debugProvince);
         else if (b.Provinces.Count > 0) dest = b.Provinces[RNG.GetInt(0, b.Provinces.Count)];
         if (dest == null) { Debug.LogWarning("[Combat] Target province not found."); return; }
 
-        // which regiment(s)
         int only = -1;
         if (!all)
         {
@@ -1281,10 +981,7 @@ public partial class CombatManager : TickBehaviour
             {
                 var free = new List<int>();
                 for (int i = 0; i < m.Regiments.Count; i++)
-                {
-                    RegimentState s = m.Regiments[i].State;
-                    if (s != RegimentState.Retreating && s != RegimentState.Fighting) free.Add(i);
-                }
+                    if (m.Regiments[i].State != RegimentState.Retreating) free.Add(i);
                 if (free.Count == 0) { Debug.LogWarning("[Combat] Nation A has no free regiment."); return; }
                 only = free[RNG.GetInt(0, free.Count)];
             }
@@ -1296,33 +993,32 @@ public partial class CombatManager : TickBehaviour
         {
             if (!all && i != only) continue;
             Regiment r = m.Regiments[i];
-            if (r.State == RegimentState.Retreating || r.State == RegimentState.Fighting) continue;
+            if (r.State == RegimentState.Retreating) continue;
             if (army.MoveRegiment(r, dest)) sent++;
         }
         Debug.Log($"[Combat] {a.Name} -> {dest.Name} ({b.Name}): sent {sent} regiment(s). At war: {WarManager.Instance.IsAtWar(a, b)}");
     }
 
-    private void RefreshView()
+    private void RefreshDiagnostics()
     {
 #if UNITY_EDITOR
-        battlesView.Clear();
-        if (!showBattlesInInspector) return;
-        for (int i = 0; i < _battles.Count; i++)
+        int r = 0, c = 0;
+        for (int i = 0; i < _units.Count; i++) { if (_units[i].InRange) r++; if (_units[i].InContact) c++; }
+        diagnostics.units = _units.Count;
+        diagnostics.inRange = r;
+        diagnostics.inContact = c;
+        diagnostics.sieges = _sieges.Count;
+
+        siegesView.Clear();
+        if (map == null) return;
+        foreach (var kv in _sieges)
         {
-            Battle b = _battles[i];
-            battlesView.Add(new BattleInfo
-            {
-                id = b.Id,
-                province = b.Province.Name,
-                sideA = b.LeadA.Name,
-                sideB = b.LeadB.Name,
-                manpowerA = b.ManpowerA,
-                manpowerB = b.ManpowerB,
-                hpA = b.HpA,
-                hpB = b.HpB,
-                ticks = b.Ticks
-            });
+            Province p = map.GetProvince(kv.Key);
+            Nation n = WorldManager.Instance.GetNation(kv.Value.Nation);
+            siegesView.Add(new SiegeInfo { province = p != null ? p.Name : "?", occupier = n != null ? n.Name : "?", progressDays = kv.Value.Progress });
         }
 #endif
     }
+
+    #endregion
 }

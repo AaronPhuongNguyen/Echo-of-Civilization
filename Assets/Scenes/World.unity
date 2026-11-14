@@ -894,7 +894,7 @@ MonoBehaviour:
     askChance: 0.35
     allyBonus: 0.15
     refusePenalty: 5
-    askCooldownDays: 180
+    askCooldownDays: 1024
     aiMayAskPlayer: 0
     peaceDrift: 0.6
     warDrift: -1.5
