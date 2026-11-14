@@ -21,17 +21,17 @@ public class FormationSettings
     [Header("Form Nation (AI asks)")]
     public bool aiFormation = true;
     [Tooltip("Max nations (besides the leader) in one empire.")]
-    [Min(1)] public int maxMembers = 4;
+    [Min(1)] public int maxMembers = 15;
     [Tooltip("Leader power must be at least this many times the target's power.")]
     public float requiredPowerRatio = 1.5f;
     [Tooltip("Relationship below this value: the AI does not even ask.")]
-    [Range(-100f, 100f)] public float minRelationToAsk = 0f;
+    [Range(-100f, 100f)] public float minRelationToAsk = 50f;
     [Tooltip("Chance of a request per AI diplomacy turn (x aggression factor).")]
-    [Range(0f, 1f)] public float askChance = 0.35f;
-    [Range(0f, 1f)] public float allyBonus = 0.15f;
-    public float refusePenalty = 5f;
+    [Range(0f, 1f)] public float askChance = 0.25f;
+    [Range(0f, 1f)] public float allyBonus = 0.1f;
+    public float refusePenalty = 10f;
     [Tooltip("Days before the same pair can be asked again.")]
-    public int askCooldownDays = 180;
+    public int askCooldownDays = 1825;
     [Tooltip("The AI may ask the player nation (needs UI: OnFormationRequestToPlayer).")]
     public bool aiMayAskPlayer = false;
 
@@ -45,11 +45,11 @@ public class FormationSettings
     public float lostLandFactor = 10f;
     public float noise = 0.4f;
     [Tooltip("A member whose relationship is BELOW this demands independence.")]
-    public float demandBelow = 20f;
+    public float demandBelow = 15f;
     [Tooltip("Demand success chance is (relationship+100)/200, multiplied by this while the empire is at war.")]
     [Range(0f, 1f)] public float warGrantFactor = 0.5f;
-    public float failedRelation = -20f;
-    public int rebelWarDelayDays = 60;
+    public float failedRelation = -25f;
+    public int rebelWarDelayDays = 180;
     public float releaseRelation = 25f;
 
     [Header("Performance (province transfers are spread over frames)")]

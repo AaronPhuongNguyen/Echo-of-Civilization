@@ -812,11 +812,11 @@ MonoBehaviour:
     minPartProvinces: 2
     splitRelation: {x: 0, y: 30}
     aiFormation: 1
-    maxMembers: 4
+    maxMembers: 15
     requiredPowerRatio: 1.5
-    minRelationToAsk: 0
-    askChance: 0.35
-    allyBonus: 0.15
+    minRelationToAsk: 50
+    askChance: 0.25
+    allyBonus: 0.1
     refusePenalty: 5
     askCooldownDays: 1024
     aiMayAskPlayer: 0
@@ -893,17 +893,21 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   settings:
     economyIntervalDays: 6
-    diplomacyIntervalDays: 15
-    militaryInterval: 1.5
-    nationsPerTick: 4
+    diplomacyIntervalDays: 90
+    militaryInterval: 3
+    nationsPerTick: 6
+    thinkBudgetMs: 2
+    snapshotInterval: 0.4
     counterAttackAfterDays: 14
     demandSpend: 1
-    maxDemandProvinces: 60
+    maxDemandProvinces: 50
+    minDemandTouch: 0.4
+    surrenderChance: 0.02
     aggressionRange: {x: 0.1, y: 0.9}
     friendlinessRange: {x: 0.2, y: 0.9}
-    peaceReserve: 0.15
-    warReserve: 0.05
-    maxIncreasesPerRound: 4
+    peaceReserve: 0.12
+    warReserve: 0.25
+    maxIncreasesPerRound: 3
     sampleProvinces: 8
     maxQueuePerProvince: 2
     mustPopGrowthBelow: 0.5
@@ -912,6 +916,7 @@ MonoBehaviour:
     economyWeight: 3
     infrastructureWeight: 2
     defendWeight: 1
+    newRegimentFullness: 0.97
     peacePrepLevel: 1
     alertMaxPrepLevel: 7
     alertThreshold: 0.25
@@ -921,35 +926,48 @@ MonoBehaviour:
     minDefendStrength: 0.25
     attackerDefendShare: 0.35
     provinceDefendWeight: 2000
-    massReadyFraction: 0.75
-    massTimeout: 40
+    queryRadiusTiles: 14
     manageShares: 1
-    shareInterval: 6
+    shareInterval: 8
+    liberationShare: 0.5
+    maxLiberators: 3
+    reinforceCheck: 4
+    surgeColumns: 3
     useTactics: 1
     showTacticVisuals: 1
-    flankSiegePreference: 0.75
-    tacticInterval: 6
+    tacticInterval: 8
+    tacticCooldown: 45
+    visualsPerSecond: 3
     siegeMinRegiments: 3
     siegeMaxSlots: 6
-    siegeTimeout: 60
-    siegeFrontalFix: 1
+    opTimeout: 60
+    massReadyFraction: 0.75
     warMinPowerRatio: 1.6
     fearRatio: 1.2
     warChancePerCheck: 0.3
     maxWars: 1
     minDaysBetweenWars: 360
     improveUntil: 45
-    winProgress: 100
     stalemateDays: 1080
-    allowVassalize: 1
+    allowVassalize: 0
     mergeProvinces: 1
-    mergeIntervalDays: 90
-    mergeMinProvinces: 8
+    mergeGoalRange: {x: 45, y: 60}
+    mergeIntervalDays: 12
     mergeSmallFactor: 0.6
-    mergeGroupSize: 8
+    mergeGroupSize: 3
     mergeNewNameChance: 0.4
     mergeOnlyInPeace: 1
+    mergePerTick: 1
   map: {fileID: 0}
+  showDiagnostics: 1
+  diagnosticsInterval: 1
+  diagnostics:
+    nations: 0
+    units: 0
+    queries: 0
+    operations: 0
+    mergeQueue: 0
+    thinkMs: 0
 --- !u!1 &1011075990
 GameObject:
   m_ObjectHideFlags: 0
@@ -1632,6 +1650,8 @@ MonoBehaviour:
   MinManpowerToRetreat: 10000
   reinforcePerDay: 0.03
   retreatSpeedTiles: 8
+  menPerTreasury: 10
+  chargeTreasury: 1
   moveSpeedTiles: 4
   reinforceSpeedTiles: 6
   allowSeaMovement: 1
