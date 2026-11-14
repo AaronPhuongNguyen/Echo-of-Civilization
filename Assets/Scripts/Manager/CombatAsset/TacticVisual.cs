@@ -100,7 +100,7 @@ public class TacticVisuals : MonoBehaviour
         lr.loop = loop;
         lr.positionCount = pts.Count;
         for (int i = 0; i < pts.Count; i++) lr.SetPosition(i, pts[i]);
-        lr.widthMultiplier = ViewHeight(origin) * 0.005f * width;
+        lr.widthMultiplier = ViewHeight(origin) * 0.01f * width;
         f.transform.position = world ? Vector3.zero : origin;
         f.transform.localScale = Vector3.one;
         f.Begin(col, life, 0f, grow);
