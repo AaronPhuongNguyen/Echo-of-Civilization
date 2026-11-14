@@ -48,7 +48,7 @@ public class RegimentView : MonoBehaviour, IPoolable
 
         Color nation = regiment.Military.Nation.Color;
         Background.color = new Color(nation.r, nation.g, nation.b, army.BackgroundAlpha);
-        ValueText.color = InverseColor(nation);
+        ValueText.color = Color.white;
 
         float s = regiment.IsColumn ? ColumnScale : 1f;
         transform.localScale = new Vector3(s, s, 1f);
@@ -142,18 +142,6 @@ public class RegimentView : MonoBehaviour, IPoolable
         tx.offsetMin = Vector2.zero; tx.offsetMax = Vector2.zero;
         ValueText.fontSize = rect.y * 0.55f;
         if (army.FontAsset != null) ValueText.font = army.FontAsset;
-    }
-
-    private static Color InverseColor(Color c)
-    {
-        var inv = new Color(1f - c.r, 1f - c.g, 1f - c.b, 1f);
-        float dr = inv.r - c.r, dg = inv.g - c.g, db = inv.b - c.b;
-        if (dr * dr + dg * dg + db * db < 0.15f)
-        {
-            float lum = c.r * 0.299f + c.g * 0.587f + c.b * 0.114f;
-            return lum > 0.5f ? Color.black : Color.white;
-        }
-        return inv;
     }
 
     #endregion

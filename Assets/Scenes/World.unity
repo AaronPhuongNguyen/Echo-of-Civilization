@@ -817,8 +817,8 @@ MonoBehaviour:
     minRelationToAsk: 50
     askChance: 0.25
     allyBonus: 0.1
-    refusePenalty: 5
-    askCooldownDays: 1024
+    refusePenalty: 10
+    askCooldownDays: 1825
     aiMayAskPlayer: 0
     peaceDrift: 0.6
     warDrift: -1.5
@@ -827,10 +827,10 @@ MonoBehaviour:
     sizeDrift: -0.3
     lostLandFactor: 10
     noise: 0.4
-    demandBelow: 20
+    demandBelow: 15
     warGrantFactor: 0.5
-    failedRelation: -20
-    rebelWarDelayDays: 60
+    failedRelation: -25
+    rebelWarDelayDays: 180
     releaseRelation: 25
     syncTransferLimit: 40
     transferBudgetMs: 2
