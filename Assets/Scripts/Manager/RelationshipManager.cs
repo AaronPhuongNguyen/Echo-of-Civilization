@@ -2,9 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DATA
-// ─────────────────────────────────────────────────────────────────────────────
+#region Data
 
 /// <summary>Derived from the relationship value: Enemy at or below the enemy threshold, Friend at or above the friend threshold.</summary>
 public enum RelationStatus : byte { Enemy = 0, Neutral = 1, Friend = 2 }
@@ -23,16 +21,22 @@ public enum RelationFlags : byte
 public sealed class Relation
 {
     public readonly int A, B;
+    public readonly Nation NationA, NationB;          // cached: removed nations delete their relations
     /// <summary>-100 .. +100. The same value for both directions.</summary>
     public float Value { get; internal set; }
     public RelationFlags Flags { get; internal set; }
-    /// <summary>+1 = improving every tick, -1 = damaging every tick, 0 = stable.</summary>
+    /// <summary>+1 = improving every tick (up to improveMaxValue), -1 = damaging every tick, 0 = stable.</summary>
     public int Trend { get; internal set; }
     /// <summary>Nation id of the overlord when Flags has Vassal, otherwise -1.</summary>
     public int OverlordId { get; internal set; } = -1;
     internal bool Trending;      // registered in the manager's trending list
 
-    internal Relation(int a, int b) { A = a; B = b; }
+    internal Relation(Nation a, Nation b)
+    {
+        bool swap = a.Id > b.Id;
+        NationA = swap ? b : a; NationB = swap ? a : b;
+        A = NationA.Id; B = NationB.Id;
+    }
 }
 
 [Serializable]
@@ -42,13 +46,14 @@ public class RelationSettings
     [Range(-100f, 0f)] public float enemyThreshold = -50f;
     [Tooltip("At or above this value the nations are Friends.")]
     [Range(0f, 100f)] public float friendThreshold = 50f;
+    [Tooltip("Improve (the continuous trend) can never raise a relationship above this. Other ways (alliance, Set / Add) can still reach 100.")]
+    [Range(0f, 100f)] public float improveMaxValue = 50f;
     [Tooltip("Relationship points added / removed per tick while Improve / Damage is running.")]
     public float changePerTick = 0.25f;
     [Tooltip("Game-seconds per relationship tick (follows game speed and pause). 0 = every frame.")]
     [Min(0f)] public float tickInterval = 1f;
 }
 
-/// <summary>Read-only snapshot shown in the Inspector (Editor only).</summary>
 [Serializable]
 public class RelationInfo
 {
@@ -60,17 +65,16 @@ public class RelationInfo
     public string overlord;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  RELATIONSHIP MANAGER  (global access: RelationshipManager.Instance)
-//
-//  - Relations are symmetric: A -> B is always the same as B -> A (one object per pair, created lazily).
-//  - Value range -100 .. +100.
-//  - Agreements: NonAggression, DefensivePact, Alliance, Vassal.
-//  - Improve / Damage = a trend that changes the value by 'changePerTick' every relationship tick.
-//  - Becoming an Enemy automatically cancels NonAggression / DefensivePact / Alliance (Vassal stays).
-//  - Relations of a removed nation are deleted; ClearNations() clears everything.
-// ─────────────────────────────────────────────────────────────────────────────
+#endregion
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  RELATIONSHIP MANAGER  (RelationshipManager.Instance)
+//  - One symmetric Relation per pair (A -> B == B -> A), created lazily. Value -100 .. +100.
+//  - Agreements: NonAggression, DefensivePact, Alliance, Vassal.
+//  - Improve / Damage = a trend per relationship tick. Improve stops at settings.improveMaxValue (50).
+//  - Becoming an Enemy cancels NonAggression / DefensivePact / Alliance (Vassal stays).
+//  - Relations of a removed nation are deleted through a per-nation index (no full scan).
+// ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-950)]
 public class RelationshipManager : TickBehaviour
 {
@@ -78,7 +82,8 @@ public class RelationshipManager : TickBehaviour
     public const float MaxValue = 100f;
     private const RelationFlags AgreementMask = RelationFlags.NonAggression | RelationFlags.DefensivePact | RelationFlags.Alliance;
 
-    // ── singleton ──
+    #region Singleton
+
     private static RelationshipManager _instance;
     private static bool _quitting;
 
@@ -105,35 +110,35 @@ public class RelationshipManager : TickBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics() { _instance = null; _quitting = false; }
 
-    // ── settings ──
+    #endregion
+
+    #region Inspector, data & events
+
     public RelationSettings settings = new RelationSettings();
 
     [Header("Context menu helpers (right-click the component title)")]
-    [Tooltip("Nation id used as A. -1 = random nation.  (Vassalize: A = overlord)")]
     [SerializeField] private int debugNationA = -1;
-    [Tooltip("Nation id used as B. -1 = random nation.  (Vassalize: B = vassal)")]
     [SerializeField] private int debugNationB = -1;
-    [Tooltip("Used by 'Add Value' (delta) and 'Set Value' (absolute).")]
     [SerializeField] private float debugAmount = 10f;
 
-    [Header("Inspector view (read-only mirror, Editor only)")]
+    [Header("Diagnostics (Editor only, throttled)")]
     [SerializeField] private bool showRelationsInInspector = true;
+    [Min(0.25f)] public float diagnosticsInterval = 1f;
     [SerializeField, Min(1)] private int inspectorMaxRows = 100;
     [SerializeField] private List<RelationInfo> relationsView = new List<RelationInfo>();
     private float _nextInspectorRefresh;
 
-    // ── data ──
     private readonly Dictionary<long, Relation> _relations = new Dictionary<long, Relation>();
-    private readonly Dictionary<int, int> _overlordOf = new Dictionary<int, int>();   // vassal id -> overlord id
+    private readonly Dictionary<int, List<Relation>> _byNation = new Dictionary<int, List<Relation>>();   // nation id -> its relations
+    private readonly Dictionary<int, int> _overlordOf = new Dictionary<int, int>();                       // vassal id -> overlord id
     private readonly List<Relation> _trending = new List<Relation>();
-    private readonly List<long> _tmpKeys = new List<long>();
+    private readonly List<Relation> _relBuf = new List<Relation>();
+    private readonly List<int> _intBuf = new List<int>();
     private float _acc;
 
     public int RelationCount => _relations.Count;
-    /// <summary>Why the last Make* / Set* call returned false.</summary>
     public string LastError { get; private set; }
 
-    // ── events ──
     /// <summary>nationA, nationB, oldValue, newValue</summary>
     public event Action<Nation, Nation, float, float> OnRelationChanged;
     public event Action<Nation, Nation, RelationStatus> OnStatusChanged;
@@ -144,9 +149,10 @@ public class RelationshipManager : TickBehaviour
 
     private WorldManager World => WorldManager.Instance;
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  LIFECYCLE
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Lifecycle
+
     private void Awake()
     {
         if (_instance != null && _instance != this)
@@ -181,41 +187,54 @@ public class RelationshipManager : TickBehaviour
         if (_instance == this && _quitting) _instance = null;
     }
 
+    private void OnDestroy() { if (_instance == this) _instance = null; }
+
+    /// <summary>Only the relations of the removed nation are touched (per-nation index).</summary>
     private void HandleNationRemoved(Nation n)
     {
         if (n == null) return;
         int id = n.Id;
 
-        _tmpKeys.Clear();
-        foreach (var kv in _relations)
+        if (_byNation.TryGetValue(id, out List<Relation> list))
         {
-            Relation r = kv.Value;
-            if (r.A != id && r.B != id) continue;
-            r.Trend = 0;                       // the trending list drops it on the next tick
-            _tmpKeys.Add(kv.Key);
+            _relBuf.Clear();
+            _relBuf.AddRange(list);
+            for (int i = 0; i < _relBuf.Count; i++)
+            {
+                Relation r = _relBuf[i];
+                r.Trend = 0;                                   // the trending list drops it on the next tick
+                _relations.Remove(Key(r.A, r.B));
+                int other = r.A == id ? r.B : r.A;
+                if (_byNation.TryGetValue(other, out List<Relation> ol))
+                {
+                    ol.Remove(r);
+                    if (ol.Count == 0) _byNation.Remove(other);
+                }
+            }
+            _byNation.Remove(id);
         }
-        for (int i = 0; i < _tmpKeys.Count; i++) _relations.Remove(_tmpKeys[i]);
 
         _overlordOf.Remove(id);
-        List<int> stale = null;
-        foreach (var kv in _overlordOf)
-            if (kv.Value == id) (stale ?? (stale = new List<int>())).Add(kv.Key);
-        if (stale != null) for (int i = 0; i < stale.Count; i++) _overlordOf.Remove(stale[i]);
+        _intBuf.Clear();
+        foreach (var kv in _overlordOf) if (kv.Value == id) _intBuf.Add(kv.Key);
+        for (int i = 0; i < _intBuf.Count; i++) _overlordOf.Remove(_intBuf[i]);
     }
 
-    /// <summary>Deletes every relationship (also called automatically when the map is regenerated).</summary>
+    /// <summary>Deletes every relationship (also called when the map is regenerated).</summary>
     public void ClearAll()
     {
         for (int i = 0; i < _trending.Count; i++) { _trending[i].Trend = 0; _trending[i].Trending = false; }
         _trending.Clear();
         _relations.Clear();
+        _byNation.Clear();
         _overlordOf.Clear();
         _acc = 0f;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  TICK
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Tick
+
     public override void Tick(float deltaTime)
     {
         if (_trending.Count > 0)
@@ -226,7 +245,7 @@ public class RelationshipManager : TickBehaviour
             {
                 _acc += deltaTime;
                 int guard = 0;
-                while (_acc >= interval && guard < 8) { _acc -= interval; ApplyTrendTick(); guard++; }
+                while (_acc >= interval && guard < 8 && _trending.Count > 0) { _acc -= interval; ApplyTrendTick(); guard++; }
                 if (guard >= 8) _acc = 0f;     // too far behind: drop the backlog
             }
         }
@@ -235,7 +254,7 @@ public class RelationshipManager : TickBehaviour
 #if UNITY_EDITOR
         if (showRelationsInInspector && Time.unscaledTime >= _nextInspectorRefresh)
         {
-            _nextInspectorRefresh = Time.unscaledTime + 1f;
+            _nextInspectorRefresh = Time.unscaledTime + Mathf.Max(0.25f, diagnosticsInterval);
             RefreshView();
         }
 #endif
@@ -243,22 +262,26 @@ public class RelationshipManager : TickBehaviour
 
     private void ApplyTrendTick()
     {
+        float step = settings.changePerTick;
+        float cap = Mathf.Clamp(settings.improveMaxValue, MinValue, MaxValue);
+
         // backwards + swap-remove: safe while event handlers start / stop trends
         for (int i = _trending.Count - 1; i >= 0; i--)
         {
+            if (i >= _trending.Count) continue;
             Relation r = _trending[i];
-            if (r.Trend == 0)
+            if (r.Trend == 0) { RemoveTrending(i, r); continue; }
+
+            if (r.Trend > 0)
             {
-                RemoveTrending(i, r);
-                continue;
+                if (r.Value >= cap) { r.Trend = 0; RemoveTrending(i, r); continue; }     // improve never passes the cap
+                SetValueInternal(r, Mathf.Min(cap, r.Value + step));
+                if (r.Value >= cap) { r.Trend = 0; RemoveTrending(i, r); }
             }
-
-            SetValueInternal(r, r.Value + r.Trend * settings.changePerTick);
-
-            if ((r.Trend > 0 && r.Value >= MaxValue) || (r.Trend < 0 && r.Value <= MinValue))
+            else
             {
-                r.Trend = 0;
-                RemoveTrending(i, r);
+                SetValueInternal(r, r.Value - step);
+                if (r.Value <= MinValue) { r.Trend = 0; RemoveTrending(i, r); }
             }
         }
     }
@@ -271,9 +294,10 @@ public class RelationshipManager : TickBehaviour
         _trending.RemoveAt(last);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  QUERIES
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Queries
+
     public RelationStatus StatusOf(float value)
     {
         if (value <= settings.enemyThreshold) return RelationStatus.Enemy;
@@ -298,9 +322,20 @@ public class RelationshipManager : TickBehaviour
     public Nation GetOverlord(Nation vassal) =>
         vassal != null && _overlordOf.TryGetValue(vassal.Id, out int o) ? World.GetNation(o) : null;
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  VALUE  (instant)
-    // ─────────────────────────────────────────────────────────────────────
+    /// <summary>True when Improve can still raise this relationship (value below improveMaxValue).</summary>
+    public bool CanImprove(Nation a, Nation b) => GetValue(a, b) < settings.improveMaxValue;
+
+    /// <summary>Fills 'result' with every nation that has a stored relation with n.</summary>
+    public void GetRelated(Nation n, List<Relation> result)
+    {
+        result.Clear();
+        if (n != null && _byNation.TryGetValue(n.Id, out List<Relation> l)) result.AddRange(l);
+    }
+
+    #endregion
+
+    #region Value (instant, can reach -100 .. +100)
+
     public bool SetValue(Nation a, Nation b, float value)
     {
         if (!Check(a, b)) return false;
@@ -316,10 +351,19 @@ public class RelationshipManager : TickBehaviour
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  IMPROVE / DAMAGE  (continuous, changePerTick every relationship tick)
-    // ─────────────────────────────────────────────────────────────────────
-    public bool ImproveRelationship(Nation a, Nation b) => SetTrend(a, b, +1);
+    #endregion
+
+    #region Improve / Damage (continuous)
+
+    /// <summary>Raises the value every tick, but only up to improveMaxValue (50). Fails when already at / above it.</summary>
+    public bool ImproveRelationship(Nation a, Nation b)
+    {
+        if (!Check(a, b)) return false;
+        if (GetValue(a, b) >= settings.improveMaxValue)
+            return Fail("Relationship cannot be improved above " + settings.improveMaxValue.ToString("F0") + ".");
+        return SetTrend(a, b, +1);
+    }
+
     public bool DamageRelationship(Nation a, Nation b) => SetTrend(a, b, -1);
     public bool StopRelationshipChange(Nation a, Nation b) => SetTrend(a, b, 0);
 
@@ -334,9 +378,9 @@ public class RelationshipManager : TickBehaviour
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  AGREEMENTS
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Agreements
 
     /// <summary>Alliance: raises the value to at least the friend threshold, replaces pacts, stops any Improve/Damage.</summary>
     public bool MakeAlly(Nation a, Nation b)
@@ -362,7 +406,7 @@ public class RelationshipManager : TickBehaviour
         Relation r = GetOrCreate(a, b);
 
         r.Trend = 0;
-        SetValueInternal(r, Mathf.Min(r.Value, settings.enemyThreshold));   // also cancels agreements via the Enemy rule
+        SetValueInternal(r, Mathf.Min(r.Value, settings.enemyThreshold));   // the Enemy rule already cancels agreements
         if ((r.Flags & AgreementMask) != 0)
         {
             r.Flags &= ~AgreementMask;
@@ -371,37 +415,24 @@ public class RelationshipManager : TickBehaviour
         return true;
     }
 
-    public bool MakeDefensivePact(Nation a, Nation b)
-    {
-        if (!Check(a, b)) return false;
-        Relation r = GetOrCreate(a, b);
-        if ((r.Flags & RelationFlags.Vassal) != 0) return Fail("An overlord and its vassal cannot sign pacts.");
-        if ((r.Flags & RelationFlags.Alliance) != 0) return Fail("They are allies (an alliance already includes this).");
-        if ((r.Flags & RelationFlags.DefensivePact) != 0) return Fail("Defensive pact already exists.");
-        if (StatusOf(r.Value) == RelationStatus.Enemy) return Fail("Enemies cannot sign a pact.");
-
-        r.Flags |= RelationFlags.DefensivePact;
-        RaiseAgreement(r);
-        return true;
-    }
-
+    public bool MakeDefensivePact(Nation a, Nation b) => MakePact(a, b, RelationFlags.DefensivePact, "Defensive pact already exists.");
     public bool BreakDefensivePact(Nation a, Nation b) => ClearFlag(a, b, RelationFlags.DefensivePact, "No defensive pact.");
+    public bool MakeNonAggressionPact(Nation a, Nation b) => MakePact(a, b, RelationFlags.NonAggression, "Non-aggression pact already exists.");
+    public bool BreakNonAggressionPact(Nation a, Nation b) => ClearFlag(a, b, RelationFlags.NonAggression, "No non-aggression pact.");
 
-    public bool MakeNonAggressionPact(Nation a, Nation b)
+    private bool MakePact(Nation a, Nation b, RelationFlags flag, string exists)
     {
         if (!Check(a, b)) return false;
         Relation r = GetOrCreate(a, b);
         if ((r.Flags & RelationFlags.Vassal) != 0) return Fail("An overlord and its vassal cannot sign pacts.");
         if ((r.Flags & RelationFlags.Alliance) != 0) return Fail("They are allies (an alliance already includes this).");
-        if ((r.Flags & RelationFlags.NonAggression) != 0) return Fail("Non-aggression pact already exists.");
+        if ((r.Flags & flag) != 0) return Fail(exists);
         if (StatusOf(r.Value) == RelationStatus.Enemy) return Fail("Enemies cannot sign a pact.");
 
-        r.Flags |= RelationFlags.NonAggression;
+        r.Flags |= flag;
         RaiseAgreement(r);
         return true;
     }
-
-    public bool BreakNonAggressionPact(Nation a, Nation b) => ClearFlag(a, b, RelationFlags.NonAggression, "No non-aggression pact.");
 
     /// <summary>Makes 'vassal' a vassal of 'overlord'. Cancels alliance / pacts, lifts the value to at least 0 (never Enemy).</summary>
     public bool Vassalize(Nation overlord, Nation vassal)
@@ -410,8 +441,7 @@ public class RelationshipManager : TickBehaviour
         if (_overlordOf.TryGetValue(vassal.Id, out int current))
             return Fail(current == overlord.Id ? "Already its vassal." : "The vassal already has another overlord.");
 
-        // no cycles: walking up from the overlord must never reach the vassal
-        int walk = overlord.Id;
+        int walk = overlord.Id;                                   // no cycles
         while (_overlordOf.TryGetValue(walk, out int up))
         {
             if (up == vassal.Id) return Fail("The overlord is itself a (sub-)vassal of that nation.");
@@ -449,9 +479,10 @@ public class RelationshipManager : TickBehaviour
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  INTERNAL
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Internal
+
     private static long Key(int a, int b) =>
         a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
@@ -465,12 +496,19 @@ public class RelationshipManager : TickBehaviour
     private Relation GetOrCreate(Nation a, Nation b)
     {
         long key = Key(a.Id, b.Id);
-        if (!_relations.TryGetValue(key, out Relation r))
-        {
-            r = a.Id < b.Id ? new Relation(a.Id, b.Id) : new Relation(b.Id, a.Id);
-            _relations.Add(key, r);
-        }
+        if (_relations.TryGetValue(key, out Relation r)) return r;
+
+        r = new Relation(a, b);
+        _relations.Add(key, r);
+        Index(a.Id, r);
+        Index(b.Id, r);
         return r;
+    }
+
+    private void Index(int nationId, Relation r)
+    {
+        if (!_byNation.TryGetValue(nationId, out List<Relation> l)) _byNation[nationId] = l = new List<Relation>(4);
+        l.Add(r);
     }
 
     private bool Check(Nation a, Nation b)
@@ -483,11 +521,7 @@ public class RelationshipManager : TickBehaviour
         return true;
     }
 
-    private bool Fail(string message)
-    {
-        LastError = message;
-        return false;
-    }
+    private bool Fail(string message) { LastError = message; return false; }
 
     private void SetValueInternal(Relation r, float value)
     {
@@ -499,31 +533,24 @@ public class RelationshipManager : TickBehaviour
         r.Value = value;
         RelationStatus newStatus = StatusOf(value);
 
-        Nation na = World.GetNation(r.A), nb = World.GetNation(r.B);
-        bool both = na != null && nb != null;
-        if (both) OnRelationChanged?.Invoke(na, nb, old, value);
-
+        OnRelationChanged?.Invoke(r.NationA, r.NationB, old, value);
         if (newStatus == oldStatus) return;
 
         if (newStatus == RelationStatus.Enemy && (r.Flags & AgreementMask) != 0)
         {
             r.Flags &= ~AgreementMask;           // enemies cannot stay allied / keep pacts
-            if (both) OnAgreementChanged?.Invoke(na, nb, r.Flags);
+            OnAgreementChanged?.Invoke(r.NationA, r.NationB, r.Flags);
         }
-        if (both) OnStatusChanged?.Invoke(na, nb, newStatus);
+        OnStatusChanged?.Invoke(r.NationA, r.NationB, newStatus);
     }
 
-    private void RaiseAgreement(Relation r)
-    {
-        Nation na = World.GetNation(r.A), nb = World.GetNation(r.B);
-        if (na != null && nb != null) OnAgreementChanged?.Invoke(na, nb, r.Flags);
-    }
+    private void RaiseAgreement(Relation r) => OnAgreementChanged?.Invoke(r.NationA, r.NationB, r.Flags);
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  CONTEXT MENU  (Inspector, play mode, after the map is generated)
-    //   Uses debugNationA / debugNationB (-1 = random). Results are logged to the Console.
-    // ─────────────────────────────────────────────────────────────────────
-    [ContextMenu("Rel: Improve Relationship (start)")]
+    #endregion
+
+    #region Context menu (-1 = random nation)
+
+    [ContextMenu("Rel: Improve Relationship (start, up to improveMaxValue)")]
     private void MenuImprove() => RunMenu("Improve", ImproveRelationship);
 
     [ContextMenu("Rel: Damage Relationship (start)")]
@@ -584,18 +611,13 @@ public class RelationshipManager : TickBehaviour
     {
         a = b = null;
         WorldManager w = World;
-        if (w == null || w.NationCount < 2)
-        {
-            Debug.LogWarning("[Relations] Need at least 2 nations (generate the map first).");
-            return false;
-        }
+        if (w == null || w.NationCount < 2) { Debug.LogWarning("[Relations] Need at least 2 nations (generate the map first)."); return false; }
 
         a = debugNationA >= 0 ? w.GetNation(debugNationA) : w.GetRandomNation();
         if (a == null) { Debug.LogWarning("[Relations] Nation A not found."); return false; }
 
         if (debugNationB >= 0) b = w.GetNation(debugNationB);
-        else
-            for (int tries = 0; tries < 32 && (b == null || b == a); tries++) b = w.GetRandomNation();
+        else for (int t = 0; t < 32 && (b == null || b == a); t++) b = w.GetRandomNation();
 
         if (b == null || b == a) { Debug.LogWarning("[Relations] Nation B not found (or equals A)."); return false; }
         return true;
@@ -614,9 +636,10 @@ public class RelationshipManager : TickBehaviour
         return s;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  INSPECTOR VIEW
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Diagnostics (Editor mirror, throttled by diagnosticsInterval)
+
     private void RefreshView()
     {
 #if UNITY_EDITOR
@@ -627,11 +650,10 @@ public class RelationshipManager : TickBehaviour
         foreach (Relation r in _relations.Values)
         {
             if (relationsView.Count >= inspectorMaxRows) break;
-            Nation na = w.GetNation(r.A), nb = w.GetNation(r.B);
             Nation o = r.OverlordId >= 0 ? w.GetNation(r.OverlordId) : null;
             relationsView.Add(new RelationInfo
             {
-                pair = (na != null ? na.Name : "#" + r.A) + " <-> " + (nb != null ? nb.Name : "#" + r.B),
+                pair = r.NationA.Name + " <-> " + r.NationB.Name,
                 value = r.Value,
                 status = StatusOf(r.Value),
                 flags = r.Flags,
@@ -642,8 +664,5 @@ public class RelationshipManager : TickBehaviour
 #endif
     }
 
-    private void OnDestroy()
-    {
-        if (_instance == this) _instance = null;
-    }
+    #endregion
 }

@@ -166,7 +166,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 83c12ced3eb425e4483e16b103dfd29a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  checkInterval: 0.5
+  checkInterval: 1
   checksPerPass: 512
 --- !u!1 &234627332
 GameObject:
@@ -225,7 +225,6 @@ GameObject:
   m_Component:
   - component: {fileID: 244872684}
   - component: {fileID: 244872685}
-  - component: {fileID: 244872686}
   m_Layer: 0
   m_Name: War
   m_TagString: Untagged
@@ -278,7 +277,6 @@ MonoBehaviour:
     truceDays: 360
     relationAfterPeace: -5
     idleYearsWhitePeace: 5
-    autoOccupyByRegiments: 1
   map: {fileID: 1905439404}
   debugNationA: -1
   debugNationB: -1
@@ -286,87 +284,8 @@ MonoBehaviour:
   debugProvince: -1
   debugAmount: 10
   showWarsInInspector: 1
+  diagnosticsInterval: 1
   warsView: []
---- !u!114 &244872686
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 244872683}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: c8d789e7d57702547928ad6bba9d40b9, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  siege:
-    enabled: 1
-    checkInterval: 1
-    maxPocketProvinces: 100
-    minRingRegiments: 2
-    attritionPerSecond: 0.0004
-    supportEnabled: 1
-    supportRadiusTiles: 300
-    scaleWithMapSize: 1
-    supportScanInterval: 3
-    maxSupportersPerBattle: 10
-    supportMinStrength: 0.3
-    supportWinRatio: 1.3
-    supportOwnNation: 1
-    supportPlayerArmies: 1
-  settings:
-    detectInterval: 0.2
-    tickInterval: 1
-    stepInterval: 0.1
-    stalemateDamage:
-      Base: 1
-      Flat: 0
-      Percent: 0
-      Total: 1
-    bonusDamage:
-      Base: 0.15
-      Flat: 0
-      Percent: 0
-      Total: 1
-    hpLostPerManpower: 5
-    damageScale: 0.01
-    useDice: 1
-    diceDamageBonus:
-      Base: 1
-      Flat: 0
-      Percent: 0
-      Total: 1
-    reinforcements: 1
-    reinforceInterval: 3
-    reinforceBelowPercent: 99
-    columnPercent: 15
-    minColumnManpower: 50
-    maxColumnsPerRegiment: 3
-    holdSplit: 0.25
-    mergeRadiusTiles: 3
-    maxNewColumnsPerScan: 12
-    occupationColumns: 1
-    occupierIntervalDays: 7
-    occupierPercent: 5
-    occupierMinManpower: 100
-    maxOccupiersPerNation: 3
-    occupierMaxHops: 4
-    returnToBorderAfterWar: 1
-  map: {fileID: 0}
-  attackLogo: {fileID: 21300000, guid: 3b4eb09f95a8470448b72eae0dc370ab, type: 3}
-  defendLogo: {fileID: 21300000, guid: b7fe80fa6f21e0c419dce02e1c1da4f7, type: 3}
-  backgroundSprite: {fileID: 21300000, guid: 7177f0c0913cf86468c79ba6887cd4fd, type: 3}
-  battleCardScale: 1.75
-  trailRadiusTiles: 4
-  trailAlpha: 0.75
-  overlayMaxSize: 1024
-  overlaySortingOrder: 2
-  debugNationA: -1
-  debugNationB: -1
-  debugRegiment: -1
-  debugProvince: -1
-  showBattlesInInspector: 1
-  battlesView: []
 --- !u!1 &519420028
 GameObject:
   m_ObjectHideFlags: 0
@@ -448,7 +367,7 @@ Camera:
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
-  m_BackGroundColor: {r: 0.19215687, g: 0.3019608, b: 0.4745098, a: 0}
+  m_BackGroundColor: {r: 0.029236369, g: 0.49946207, b: 0.6886792, a: 0}
   m_projectionMatrixMode: 1
   m_GateFitMode: 2
   m_FOVAxisMode: 0
@@ -551,6 +470,7 @@ MonoBehaviour:
   map: {fileID: 0}
   startNationId: -1
   spectator: 1
+  useFogOfWar: 1
   playerNationName: 
 --- !u!1 &606491824
 GameObject:
@@ -799,12 +719,14 @@ MonoBehaviour:
   settings:
     enemyThreshold: -50
     friendThreshold: 50
+    improveMaxValue: 50
     changePerTick: 0.25
     tickInterval: 1
   debugNationA: -1
   debugNationB: -1
   debugAmount: 10
   showRelationsInInspector: 1
+  diagnosticsInterval: 1
   inspectorMaxRows: 100
   relationsView: []
 --- !u!1 &833740664
@@ -845,6 +767,7 @@ Transform:
   - {fileID: 816672604}
   - {fileID: 2034183098}
   - {fileID: 244872684}
+  - {fileID: 1765447975}
   - {fileID: 929751828}
   - {fileID: 588382371}
   m_Father: {fileID: 0}
@@ -867,11 +790,12 @@ MonoBehaviour:
     daysPerIncrease: 90
     maxQueue: 100
     amountPerIncrease: 1
+  popGrowthYears: 5
+  popGrowthBase: 5000
+  growthProvincesPerFrame: 512
   showNationsInInspector: 1
   inspectorRefreshSeconds: 1
   nationsView: []
-  popGrowthYears: 5
-  popGrowthBase: 5000
 --- !u!114 &833740668
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -908,10 +832,20 @@ MonoBehaviour:
     failedRelation: -20
     rebelWarDelayDays: 60
     releaseRelation: 25
+    syncTransferLimit: 40
+    transferBudgetMs: 2
+    minTransfersPerFrame: 4
   map: {fileID: 0}
   debugNationA: -1
   debugNationB: -1
   debugParts: 3
+  showDiagnostics: 1
+  diagnosticsInterval: 1
+  diagnostics:
+    empires: 0
+    pendingJobs: 0
+    pendingProvinces: 0
+    lockedNations: 0
   empiresView: []
 --- !u!1 &929751827
 GameObject:
@@ -1293,6 +1227,96 @@ Transform:
   - {fileID: 1613407032}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1765447974
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1765447975}
+  - component: {fileID: 1765447976}
+  m_Layer: 0
+  m_Name: Combat
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1765447975
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1765447974}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 833740665}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1765447976
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1765447974}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8d789e7d57702547928ad6bba9d40b9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  settings:
+    combatInterval: 0.1
+    damageScale: 0.01
+    useDice: 1
+    diceBonus:
+      Base: 0.5
+      Flat: 0
+      Percent: 0
+      Total: 1
+    diceRollDays: 7
+    diceBuffDays: 6
+    pushStartShare: 0.5
+    pushFullShare: 0.9
+    occupyDays: 3
+    defendDivisor: 1
+    reinforcements: 1
+    reinforceInterval: 3
+    reinforceBelowPercent: 99
+    columnPercent: 15
+    minColumnManpower: 50
+    maxColumnsPerRegiment: 3
+    mergeRadiusTiles: 3
+    maxNewColumnsPerScan: 12
+    occupationColumns: 1
+    occupierIntervalDays: 7
+    occupierPercent: 5
+    occupierMinManpower: 100
+    maxOccupiersPerNation: 3
+    occupierMaxHops: 4
+    returnToBorderAfterWar: 1
+  map: {fileID: 0}
+  trailAlpha: 0.75
+  overlayMaxSize: 1024
+  overlaySortingOrder: 2
+  debugNationA: -1
+  debugNationB: -1
+  debugRegiment: -1
+  debugProvince: -1
+  showDiagnostics: 1
+  diagnosticsInterval: 1
+  diagnostics:
+    units: 0
+    inRange: 0
+    inContact: 0
+    sieges: 0
+  siegesView: []
 --- !u!1 &1905439402
 GameObject:
   m_ObjectHideFlags: 0
@@ -1361,6 +1385,9 @@ MonoBehaviour:
     minProvinces: 1
     provinceMaxDivisor: 40
     minTilesPerProvince: 10
+    seaTilesPerBlock: 6000
+    lakeMaxTiles: 20000
+    seaBorderAlpha: 0.12
     taxRange: {x: 0.1, y: 1.1}
     economyRange: {x: 0.05, y: 0.5}
     defendRange: {x: 0.1, y: 0.5}
@@ -1394,7 +1421,7 @@ MonoBehaviour:
     maxNations: 10
     nationSizeVariation: 0.8
     minIslandNationFactor: 0.3
-    waterColor: {r: 0.18823531, g: 0.29803923, b: 0.4666667, a: 1}
+    waterColor: {r: 0.027450982, g: 0.49803925, b: 0.6862745, a: 1}
     neutralColor: {r: 0.6, g: 0.6, b: 0.6, a: 1}
     borderColor: {r: 0, g: 0, b: 0, a: 1}
     provinceBorderAlpha: 0.35
@@ -1408,11 +1435,12 @@ MonoBehaviour:
     chunkBuildsPerFrame: 2
     maxPooledChunks: 6
     generateOnBackgroundThread: 1
+    parallelGeneration: 1
   generateOnStart: 1
   viewCamera: {fileID: 0}
   merge:
-    maxProvincesPerMerge: 8
-    costPerAbsorbedProvince: 0
+    maxProvincesPerMerge: 20
+    costPerAbsorbedProvince: 50
     sumDefend: 1
     blockWhileOccupied: 1
   capitalMarkerPrefab: {fileID: 7419103687079356653, guid: ab5ab515898ce6048ac681ac18223750, type: 3}
@@ -1587,10 +1615,12 @@ MonoBehaviour:
   map: {fileID: 1905439404}
   screenCanvas: {fileID: 1613407035}
   backgroundSprite: {fileID: 21300000, guid: d474c929123057e4aa307f0be10b79a5, type: 3}
-  markerSprite: {fileID: 21300000, guid: a047e209074096c49819db6fb62fa60d, type: 3}
   fontAsset: {fileID: 11400000, guid: 03f780b01b9b2e640984a49e5a44edd1, type: 2}
   regimentSize: 60
   backgroundAlpha: 1
+  menPerValue: 1000
+  maxRegimentValue: 100
+  maxColumnValue: 10
   manpowerRecoveryYears: 12
   defaultPreparationLevel: 2
   prepStepInterval: 0.1
@@ -1602,23 +1632,25 @@ MonoBehaviour:
   MinManpowerToRetreat: 10000
   reinforcePerDay: 0.03
   retreatSpeedTiles: 8
+  moveSpeedTiles: 4
+  reinforceSpeedTiles: 6
+  allowSeaMovement: 1
+  seaSpeedFactor: 0.5
+  seaRangeTiles: 100
+  maxSeaNodes: 2500
   stackSpacing: 1.1
   viewCamera: {fileID: 0}
   textMaxVisibleTiles: 250
   markerMaxVisibleTiles: 700
+  visualRefreshInterval: 0.5
   debugNation: -1
   debugRegiment: -1
   debugAmount: 20
-  allowSeaMovement: 1
-  seaSpeedFactor: 0.5
-  seaRangeTiles: 100
   showMilitaryInInspector: 1
+  diagnosticsInterval: 1
   militaryView: []
   debugShowWarManpower: 1
   debugLabelFill: 0.75
-  moveSpeedTiles: 4
-  reinforceSpeedTiles: 6
-  maxSeaNodes: 2500
 --- !u!1 &2035398686
 GameObject:
   m_ObjectHideFlags: 0

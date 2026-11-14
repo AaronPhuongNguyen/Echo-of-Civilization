@@ -76,6 +76,24 @@ public sealed class Military
 
     #endregion
 
+    #region Cost
+    public double AffordableMen =>
+    !ArmyManager.HasInstance || !ArmyManager.Instance.chargeTreasury ? double.MaxValue
+    : Math.Max(0.0, Nation.Treasury) * ArmyManager.Instance.menPerTreasury;
+
+    private bool Pay(double men)
+    {
+        ArmyManager a = ArmyManager.Instance;
+        return !a.chargeTreasury || Nation.TrySpend(men / a.menPerTreasury);
+    }
+
+    private void Refund(double men)
+    {
+        ArmyManager a = ArmyManager.Instance;
+        if (a.chargeTreasury && men > 0.0) Nation.AddMoney(men / a.menPerTreasury);
+    }
+    #endregion
+
     public double TotalRegimentManpower()
     {
         double sum = 0.0;
@@ -86,7 +104,7 @@ public sealed class Military
 
     #region Regiments
 
-    public Regiment AddRegiment(Province at = null)
+    public Regiment AddRegiment(Province at = null, bool pay = false)
     {
         LastError = null;
         if (!ArmyManager.HasInstance) { LastError = "No ArmyManager."; return null; }
@@ -101,9 +119,19 @@ public sealed class Military
         ClampRegiments();
 
         double free = Math.Max(0.0, CurrentManpower - TotalRegimentManpower());
-        r.Manpower = Math.Min(r.Allocation, free);
+        double men = Math.Min(r.Allocation, free);
+        if (pay) men = Math.Min(men, AffordableMen);
+        if (pay && (men < 1.0 || !Pay(men)))
+        {
+            Regiments.Remove(r);
+            army.ReleaseRegiment(r);
+            army.RefreshStacks(this);
+            RecalculateShares();
+            LastError = "Not enough treasury.";
+            return null;
+        }
+        r.Manpower = men;
         r.RefreshText();
-
         army.RaiseCreated(r);
         return r;
     }
@@ -166,15 +194,17 @@ public sealed class Military
     #region Columns
 
     /// <summary>Creates a reinforcement column with 'men' men (max 10 value) at a province.</summary>
-    internal Regiment AddColumn(Province at, double men)
+    internal Regiment AddColumn(Province at, double men, bool pay = true)
     {
         if (!ArmyManager.HasInstance || at == null || men <= 0.0) return null;
         ArmyManager army = ArmyManager.Instance;
+        men = Math.Min(men, army.ColumnCapMen);
+        if (pay) { men = Math.Min(men, AffordableMen); if (men < 1.0 || !Pay(men)) return null; }
         Regiment c = army.SpawnRegiment(this, at);
-        if (c == null) return null;
+        if (c == null) { if (pay) Refund(men); return null; }
         c.IsColumn = true;
         c.Share = 0f;
-        c.Manpower = Math.Min(men, army.ColumnCapMen);
+        c.Manpower = men;
         Columns.Add(c);
         return c;
     }
@@ -183,6 +213,7 @@ public sealed class Military
     internal void RemoveColumn(Regiment c)
     {
         if (!Columns.Remove(c)) return;
+        Refund(c.Manpower);
         ArmyManager.Instance.ReleaseRegiment(c);
     }
 
@@ -376,6 +407,11 @@ public class ArmyManager : TickBehaviour
     [Range(0f, 1f)] public float reinforcePerDay = 0.02f;
     [Tooltip("Retreat speed in tiles per game-second (real map movement).")]
     [Min(0f)] public float retreatSpeedTiles = 8f;
+
+    [Header("Deploy cost")]
+    [Tooltip("1 treasury = this many men (regiment creation, reinforcement and occupation columns).")]
+    [Min(0.01f)] public float menPerTreasury = 10f;
+    public bool chargeTreasury = true;
 
     [Header("Movement")]
     [Tooltip("March speed in tiles per game-second. Combat push can never be faster than this.")]

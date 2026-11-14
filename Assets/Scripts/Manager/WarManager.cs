@@ -2,12 +2,11 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DATA
-// ─────────────────────────────────────────────────────────────────────────────
+#region Data types
 
 public enum WarSide : byte { None = 0, Attacker = 1, Defender = 2 }
 public enum WarResult : byte { Ongoing = 0, AttackerVictory = 1, DefenderVictory = 2, WhitePeace = 3 }
+public enum WarOutcome { TakeOccupied, WhitePeace, Vassalize }
 
 /// <summary>One war. Two "main" nations (the declarer and the target) plus any number of allies on each side.</summary>
 public sealed class War
@@ -21,32 +20,24 @@ public sealed class War
     public readonly List<int> Defenders = new List<int>(4);   // nation ids (first = main defender)
     /// <summary>province id -> nation id of the occupier. Ownership only changes when the war ends in a victory.</summary>
     public readonly Dictionary<int, int> Occupied = new Dictionary<int, int>();
+    /// <summary>Provinces demanded in the peace deal: province id -> nation id that receives it. Empty = use Occupied.</summary>
+    public readonly Dictionary<int, int> Claims = new Dictionary<int, int>();
 
-    // ── war progress: every side has its own 0..100 % ──
-    //   progress = milestones (capital / army destroyed / all provinces) + accumulated monthly bonus
-    /// <summary>Attacker side progress 0..100 (%).</summary>
+    /// <summary>Attacker / defender progress 0..100 (%): milestones + permanent bonus.</summary>
     public float AttackerProgress { get; internal set; }
-    /// <summary>Defender side progress 0..100 (%).</summary>
     public float DefenderProgress { get; internal set; }
-    /// <summary>Permanent part of the progress (monthly "more provinces" bonus, debug additions).</summary>
     public float AttackerBonus { get; internal set; }
     public float DefenderBonus { get; internal set; }
-    /// <summary>The main nation had at least one regiment when the war started ("army destroyed" can only happen then).</summary>
+    /// <summary>The main nation had a regiment when the war started ("army destroyed" can only happen then).</summary>
     public bool AttackerHadArmy { get; internal set; }
     public bool DefenderHadArmy { get; internal set; }
 
-    /// <summary>Attacker progress minus defender progress (-100 .. +100). Kept for old code that read the single score.</summary>
+    /// <summary>Attacker progress minus defender progress (-100 .. +100).</summary>
     public float Score => AttackerProgress - DefenderProgress;
 
     internal bool AttackerDecisionRaised, DefenderDecisionRaised;
 
     public long LastActivityDay { get; internal set; }
-
-    /// <summary>Provinces demanded in the peace deal: province id -> nation id that receives it. Empty = use Occupied.</summary>
-    public readonly Dictionary<int, int> Claims = new Dictionary<int, int>();
-
-    public float ProgressOf(WarSide side) =>
-        side == WarSide.Attacker ? AttackerProgress : side == WarSide.Defender ? DefenderProgress : 0f;
     public int DaysActive { get; internal set; }
     public bool Ended { get; internal set; }
     public WarResult Result { get; internal set; }
@@ -59,6 +50,9 @@ public sealed class War
         LastActivityDay = startDay;
     }
 
+    public float ProgressOf(WarSide side) =>
+        side == WarSide.Attacker ? AttackerProgress : side == WarSide.Defender ? DefenderProgress : 0f;
+
     public WarSide SideOf(int nationId)
     {
         if (Attackers.Contains(nationId)) return WarSide.Attacker;
@@ -67,7 +61,9 @@ public sealed class War
     }
 
     public bool IsMain(int nationId) => nationId == AttackerId || nationId == DefenderId;
-    public static WarSide Opposite(WarSide s) => s == WarSide.Attacker ? WarSide.Defender : s == WarSide.Defender ? WarSide.Attacker : WarSide.None;
+
+    public static WarSide Opposite(WarSide s) =>
+        s == WarSide.Attacker ? WarSide.Defender : s == WarSide.Defender ? WarSide.Attacker : WarSide.None;
 }
 
 [Serializable]
@@ -80,78 +76,59 @@ public class WarSettings
     public float declareRelationThreshold = -10f;
     [Tooltip("Declaring war sets the relationship to Enemy (also cancels alliance / pacts).")]
     public bool makeEnemyOnDeclare = true;
-    [Tooltip("Allies of the attacker / defender join automatically.")]
     public bool callAllies = true;
     [Tooltip("Defensive-pact partners of the DEFENDER join automatically.")]
     public bool callDefensivePacts = true;
-    [Tooltip("Vassals follow their overlord into the war.")]
     public bool vassalsFollowOverlord = true;
 
     [Header("War progress (each side 0..100 %, the war never ends by itself)")]
-    [Tooltip("Progress while the side holds the capital of the enemy main nation (lost again when it is liberated).")]
     [Range(0f, 100f)] public float capitalOccupiedPercent = 20f;
-    [Tooltip("Progress while the army of the enemy main nation is destroyed (no regiments left).")]
     [Range(0f, 100f)] public float armyDestroyedPercent = 30f;
-    [Tooltip("Progress while ALL provinces of the enemy main nation are occupied by this side.")]
     [Range(0f, 100f)] public float allProvincesPercent = 50f;
     [Tooltip("Every month the side with MORE occupied provinces gains this much (permanent).")]
     [Range(0f, 100f)] public float monthlyLeadPercent = 5f;
 
-    [Header("Peace demands (winner spends its war progress on provinces)")]
-    [Tooltip("War score cost of an AVERAGE province of the loser (value 1.0).")]
+    [Header("Peace demands")]
     [Min(0.1f)] public float provinceScoreCost = 8f;
-    [Tooltip("Extra cost when the province is the capital of its owner.")]
     [Min(0f)] public float capitalScoreCost = 20f;
-    [Tooltip("Cost multiplier for a province the winning side already occupies.")]
     [Range(0f, 1f)] public float occupiedCostFactor = 0.5f;
 
     [Header("Occupation spread")]
-    [Tooltip("When a province becomes occupied, this many NEIGHBOURING enemy provinces (random, free of enemy fighters) are occupied with it. 0 = All of surrounding provinces.")]
+    [Tooltip("A newly occupied province also occupies this many neighbouring enemy provinces (free of enemy fighters). 0 = ALL neighbours.")]
     [Min(0)] public int spreadProvinces = 0;
 
     [Header("After the war")]
-    [Tooltip("Days nobody on the two sides may declare war on each other again.")]
     public int truceDays = 360;
-    [Tooltip("Relationship value set between the two main nations after peace (only if it is lower).")]
     public float relationAfterPeace = -5f;
-    [Header("Idle war")]
-    [Tooltip("A war with no occupation change and no battle for this many YEARS ends in white peace. 0 = off.")]
-    [Min(0f)] public float idleYearsWhitePeace = 5f;
 
-    [Header("Army integration")]
-    [Tooltip("Every day, a regiment that is standing in an enemy province occupies it (and liberates its own side's provinces).")]
-    public bool autoOccupyByRegiments = true;
+    [Header("Idle war")]
+    [Tooltip("A war with no occupation change / siege for this many YEARS ends in white peace. 0 = off.")]
+    [Min(0f)] public float idleYearsWhitePeace = 5f;
 }
 
 [Serializable]
 public class WarInfo
 {
     public int id;
-    public string name;
-    public string attackers;
-    public string defenders;
-    public float score;
-    public float attackerProgress;
-    public float defenderProgress;
-    public int days;
-    public int occupiedProvinces;
+    public string name, attackers, defenders;
+    public float score, attackerProgress, defenderProgress;
+    public int days, occupiedProvinces;
 }
-public enum WarOutcome { TakeOccupied, WhitePeace, Vassalize }
+
+#endregion
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  WAR MANAGER  (global access: WarManager.Instance)
-//
-//  - Declare war (needs relation < threshold, no pact / vassal link, no truce)  /  Force declare (ignores them)
-//  - Allies / defensive pacts / vassals join automatically (settings)
-//  - Join / Leave / Capitulate / White peace / Victory (force end)
-//  - Occupy / Liberate provinces -> war score -> automatic capitulation
-//  - Occupying a province also occupies neighbouring enemy province(s) (settings.spreadProvinces)
-//  - Victory transfers the provinces the winners occupy (through MapManager.SetProvinceOwner)
-//  - Truce after peace, events, Inspector view, context menus (all can be forced)
+//  WAR MANAGER  (WarManager.Instance)
+//   Declare / join / leave / capitulate / peace, allies + pacts + vassals, truce.
+//   Occupation is DONE BY CombatManager's siege (Occupy / Liberate are called from there).
+//   Occupying also spreads to neighbouring enemy provinces. Victory transfers the occupied / claimed provinces.
+//   OnWarEnded is raised LAST (war already unregistered) so CombatManager can send the armies home.
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-750)]
 public class WarManager : TickBehaviour
 {
-    // ── singleton ──
+    #region Singleton
+
     private static WarManager _instance;
     private static bool _quitting;
 
@@ -178,35 +155,38 @@ public class WarManager : TickBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics() { _instance = null; _quitting = false; }
 
-    // ── settings ──
+    #endregion
+
+    #region Inspector, data & events
+
     public WarSettings settings = new WarSettings();
     [Tooltip("Defaults to the MapManager found in the scene (needed to transfer provinces).")]
     [SerializeField] private MapManager map;
 
     [Header("Context menu helpers (right-click the component title)")]
-    [Tooltip("Nation id used as A (attacker / first nation). -1 = random nation.")]
     [SerializeField] private int debugNationA = -1;
-    [Tooltip("Nation id used as B (defender / second nation). -1 = random nation.")]
     [SerializeField] private int debugNationB = -1;
-    [Tooltip("Nation id used as C (the nation that joins a war). -1 = random nation.")]
     [SerializeField] private int debugNationC = -1;
-    [Tooltip("Province id for Occupy / Liberate. -1 = random province (of the target for Occupy, of the occupied ones for Liberate).")]
     [SerializeField] private int debugProvince = -1;
-    [Tooltip("Used by 'Add War Score' (positive = attacker side).")]
     [SerializeField] private float debugAmount = 10f;
 
-    [Header("Inspector view (read-only mirror, Editor only)")]
+    [Header("Diagnostics (Editor only, throttled)")]
     [SerializeField] private bool showWarsInInspector = true;
+    [Min(0.25f)] public float diagnosticsInterval = 1f;
     [SerializeField] private List<WarInfo> warsView = new List<WarInfo>();
     private float _nextInspectorRefresh;
 
-    // ── data ──
     private readonly List<War> _wars = new List<War>();
     private readonly Dictionary<int, List<War>> _byNation = new Dictionary<int, List<War>>();
-    private readonly Dictionary<long, long> _truces = new Dictionary<long, long>();   // pair key -> last truce day
-    private readonly List<War> _tmp = new List<War>();
+    private readonly Dictionary<long, long> _truces = new Dictionary<long, long>();
+    private readonly List<War> _tmp = new List<War>();             // daily / month / nation removal loops
+    private readonly List<War> _tmpSurrender = new List<War>();
     private readonly List<Province> _spreadBuf = new List<Province>();
     private readonly List<Nation> _owners = new List<Nation>();
+    private readonly List<Nation> _victims = new List<Nation>();
+    private readonly List<int> _idBuf = new List<int>();
+    private readonly List<KeyValuePair<int, int>> _pairBuf = new List<KeyValuePair<int, int>>();
+    private readonly HashSet<int> _seen = new HashSet<int>();
 
     private int _nextWarId = 1;
     private MapManager _map;
@@ -215,34 +195,26 @@ public class WarManager : TickBehaviour
     public int WarCount => _wars.Count;
     public string LastError { get; private set; }
 
-    // ── events ──
     public event Action<War> OnWarDeclared;
     public event Action<War, WarResult> OnWarEnded;
-    /// <summary>war, nation, side it joined</summary>
     public event Action<War, Nation, WarSide> OnNationJoined;
     public event Action<War, Nation> OnNationLeft;
     /// <summary>war, province, occupier (null = liberated)</summary>
     public event Action<War, Province, Nation> OnProvinceOccupationChanged;
-    /// <summary>
-    /// Raised AFTER OnProvinceOccupationChanged for a province that was occupied only because it
-    /// neighbours a province that just got occupied (no army walked into it). war, province, occupier.
-    /// </summary>
+    /// <summary>After OnProvinceOccupationChanged for a province occupied only through spread.</summary>
     public event Action<War, Province, Nation> OnProvinceOccupationSpread;
-    /// <summary>Raised when the progress of any side changed (use War.AttackerProgress / DefenderProgress).</summary>
     public event Action<War> OnWarProgressChanged;
-    /// <summary>Raised once when a side reaches decisionProgress (again if it drops below and re-reaches it).</summary>
     public event Action<War, WarSide> OnWarDecisionAvailable;
 
     protected override int TickPriority => -750;
 
-
-
     private WorldManager World => WorldManager.Instance;
     private RelationshipManager Rel => RelationshipManager.Instance;
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  LIFECYCLE
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Lifecycle
+
     private void Awake()
     {
         if (_instance != null && _instance != this)
@@ -300,13 +272,13 @@ public class WarManager : TickBehaviour
 #if UNITY_EDITOR
         if (showWarsInInspector && Time.unscaledTime >= _nextInspectorRefresh)
         {
-            _nextInspectorRefresh = Time.unscaledTime + 1f;
+            _nextInspectorRefresh = Time.unscaledTime + Mathf.Max(0.25f, diagnosticsInterval);
             RefreshView();
         }
 #endif
     }
 
-    /// <summary>Forgets every war and truce (also called when the map is regenerated). No events, no transfers.</summary>
+    /// <summary>Forgets every war and truce (map regenerated). No events, no transfers.</summary>
     public void ClearAll()
     {
         _wars.Clear();
@@ -318,11 +290,10 @@ public class WarManager : TickBehaviour
     private void HandleNationRemoved(Nation n)
     {
         if (n == null || !_byNation.TryGetValue(n.Id, out List<War> list)) return;
-        _tmp.Clear();
-        _tmp.AddRange(list);
-        for (int i = 0; i < _tmp.Count; i++)
+        var copy = new List<War>(list);                         // rare event: a private copy is fine
+        for (int i = 0; i < copy.Count; i++)
         {
-            War w = _tmp[i];
+            War w = copy[i];
             if (w.Ended) continue;
             if (w.IsMain(n.Id)) EndWar(w, WarResult.WhitePeace);
             else LeaveWar(w, n);
@@ -330,14 +301,19 @@ public class WarManager : TickBehaviour
         _byNation.Remove(n.Id);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  DAILY
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Daily / monthly
+
     private void HandleDay()
     {
         if (_wars.Count == 0) return;
         _tmp.Clear();
         _tmp.AddRange(_wars);
+
+        long today = DateManager.Instance.TotalDays;
+        long idleLimit = settings.idleYearsWhitePeace > 0f
+            ? (long)(settings.idleYearsWhitePeace * DateManager.DaysPerMonth * DateManager.MonthsPerYear) : 0L;
 
         for (int i = 0; i < _tmp.Count; i++)
         {
@@ -346,83 +322,47 @@ public class WarManager : TickBehaviour
             w.DaysActive++;
 
             Nation a = World.GetNation(w.AttackerId), d = World.GetNation(w.DefenderId);
-            if (a == null || a.IsEmpty) { EndWar(w, WarResult.DefenderVictory); continue; }   // main nation was wiped out
+            if (a == null || a.IsEmpty) { EndWar(w, WarResult.DefenderVictory); continue; }   // main nation wiped out
             if (d == null || d.IsEmpty) { EndWar(w, WarResult.AttackerVictory); continue; }
 
-            if (settings.idleYearsWhitePeace > 0f)
-            {
-                long limit = (long)(settings.idleYearsWhitePeace * DateManager.DaysPerMonth * DateManager.MonthsPerYear);
-                if (DateManager.Instance.TotalDays - w.LastActivityDay >= limit) { EndWar(w, WarResult.WhitePeace); continue; }
-            }
+            if (idleLimit > 0L && today - w.LastActivityDay >= idleLimit) { EndWar(w, WarResult.WhitePeace); continue; }
 
-            if (settings.autoOccupyByRegiments) AutoOccupy(w);
-            if (!w.Ended) RecalculateProgress(w);        // also catches "army destroyed"
+            RecalculateProgress(w);                              // also catches "army destroyed"
         }
     }
 
-    public void MarkActivity(Nation a, Nation b)
-    {
-        War w = GetWar(a, b);
-        if (w != null) w.LastActivityDay = DateManager.Instance.TotalDays;
-    }
-
-    /// <summary>Every month the side that holds MORE provinces gets monthlyLeadPercent (permanent). Equal = nobody.</summary>
+    /// <summary>The side with MORE occupied provinces gains monthlyLeadPercent (permanent). Equal = nobody.</summary>
     private void HandleMonth()
     {
         if (_wars.Count == 0) return;
         _tmp.Clear();
         _tmp.AddRange(_wars);
 
+        float gain = Mathf.Max(0f, settings.monthlyLeadPercent);
         for (int i = 0; i < _tmp.Count; i++)
         {
             War w = _tmp[i];
             if (w.Ended) continue;
 
-            int a = CountOccupied(w, WarSide.Attacker), d = CountOccupied(w, WarSide.Defender);
-            float gain = Mathf.Max(0f, settings.monthlyLeadPercent);
+            CountOccupiedBoth(w, out int a, out int d);
             if (a > d) w.AttackerBonus = Mathf.Clamp(w.AttackerBonus + gain, 0f, 100f);
             else if (d > a) w.DefenderBonus = Mathf.Clamp(w.DefenderBonus + gain, 0f, 100f);
             RecalculateProgress(w);
         }
     }
 
-    /// <summary>A regiment (not retreating) standing in a province: enemy-owned -> occupy it, own side's occupied province -> liberate it.</summary>
-    private void AutoOccupy(War w)
+    /// <summary>Keeps the idle-war timer alive (call it from sieges / fights).</summary>
+    public void MarkActivity(War w)
     {
-        if (!ArmyManager.HasInstance) return;
-        ArmyManager army = ArmyManager.Instance;
-
-        for (int side = 0; side < 2 && !w.Ended; side++)
-        {
-            List<int> members = side == 0 ? w.Attackers : w.Defenders;
-            for (int m = 0; m < members.Count && !w.Ended; m++)
-            {
-                Nation n = World.GetNation(members[m]);
-                Military mil = n != null ? army.GetMilitary(n) : null;
-                if (mil == null) continue;
-
-                for (int r = 0; r < mil.Regiments.Count && !w.Ended; r++)
-                {
-                    Regiment reg = mil.Regiments[r];
-                    if (reg.State == RegimentState.Retreating || reg.Manpower <= 0.5) continue;
-                    Province p = reg.LocationProvince;
-                    if (p == null || p.Owner == null) continue;
-
-                    WarSide ownerSide = w.SideOf(p.Owner.Id);
-                    WarSide mySide = w.SideOf(n.Id);
-                    if (ownerSide == WarSide.None) continue;
-                    if (CombatManager.HasInstance && !CombatManager.Instance.CanTakeProvince(w, n, p)) continue;   // defenders must be cleared first
-
-                    if (ownerSide != mySide) Occupy(w, n, p);                                   // enemy province
-                    else if (w.Occupied.ContainsKey(p.Id)) Liberate(w, p);                      // our province, occupied -> take back
-                }
-            }
-        }
+        if (w != null && !w.Ended) w.LastActivityDay = DateManager.Instance.TotalDays;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  QUERIES
-    // ─────────────────────────────────────────────────────────────────────
+    public void MarkActivity(Nation a, Nation b) => MarkActivity(GetWar(a, b));
+
+    #endregion
+
+    #region Queries
+
     public bool IsAtWar(Nation n) => n != null && _byNation.TryGetValue(n.Id, out List<War> l) && l.Count > 0;
 
     /// <summary>True when a and b are on OPPOSITE sides of at least one war.</summary>
@@ -451,15 +391,14 @@ public class WarManager : TickBehaviour
         return left > 0 ? left : 0;
     }
 
-    /// <summary>Fills 'result' with every nation that is on the opposite side of n in any war.</summary>
+    /// <summary>Fills 'result' with every nation on the opposite side of n in any war.</summary>
     public void GetEnemies(Nation n, List<Nation> result)
     {
         result.Clear();
         if (n == null || !_byNation.TryGetValue(n.Id, out List<War> l)) return;
         for (int i = 0; i < l.Count; i++)
         {
-            WarSide mine = l[i].SideOf(n.Id);
-            List<int> enemies = mine == WarSide.Attacker ? l[i].Defenders : l[i].Attackers;
+            List<int> enemies = l[i].SideOf(n.Id) == WarSide.Attacker ? l[i].Defenders : l[i].Attackers;
             for (int j = 0; j < enemies.Count; j++)
             {
                 Nation e = World.GetNation(enemies[j]);
@@ -468,15 +407,31 @@ public class WarManager : TickBehaviour
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  DECLARE WAR
-    //   normal : relation < declareRelationThreshold, no truce, no alliance / pact / vassal link
-    //   force  : ignores all of that (cancels the agreements instead)
-    // ─────────────────────────────────────────────────────────────────────
-    public War DeclareWar(Nation attacker, Nation defender) => DeclareWar(attacker, defender, false);
+    public int CountOccupied(War war, WarSide bySide)
+    {
+        int c = 0;
+        foreach (var kv in war.Occupied) if (war.SideOf(kv.Value) == bySide) c++;
+        return c;
+    }
 
+    private void CountOccupiedBoth(War war, out int attacker, out int defender)
+    {
+        attacker = defender = 0;
+        foreach (var kv in war.Occupied)
+        {
+            WarSide s = war.SideOf(kv.Value);
+            if (s == WarSide.Attacker) attacker++; else if (s == WarSide.Defender) defender++;
+        }
+    }
+
+    #endregion
+
+    #region Declare war
+
+    public War DeclareWar(Nation attacker, Nation defender) => DeclareWar(attacker, defender, false);
     public War ForceDeclareWar(Nation attacker, Nation defender) => DeclareWar(attacker, defender, true);
 
+    /// <summary>normal: relation below threshold, no truce, no alliance / pact / vassal link. force: ignores all of that.</summary>
     public War DeclareWar(Nation attacker, Nation defender, bool force)
     {
         if (!Check(attacker, defender)) return null;
@@ -504,12 +459,11 @@ public class WarManager : TickBehaviour
         }
         else
         {
-            // a vassal link is not removed by MakeEnemy, so free it explicitly
             if (rel.IsVassalOf(defender, attacker)) rel.ReleaseVassal(attacker, defender);
             else if (rel.IsVassalOf(attacker, defender)) rel.ReleaseVassal(defender, attacker);
         }
 
-        if (settings.makeEnemyOnDeclare) rel.MakeEnemy(attacker, defender);   // enemies cannot keep pacts / alliances
+        if (settings.makeEnemyOnDeclare) rel.MakeEnemy(attacker, defender);
 
         var war = new War(_nextWarId++, attacker.Id, defender.Id,
             attacker.Name + " vs " + defender.Name + " War", DateManager.Instance.TotalDays);
@@ -527,32 +481,33 @@ public class WarManager : TickBehaviour
         return war;
     }
 
-    /// <summary>Allies / (defender only) defensive-pact partners / vassals of 'leader' join the leader's side.</summary>
+    /// <summary>Allies / (defender only) defensive-pact partners / vassals of 'leader' join its side.</summary>
     private void CallAllies(War war, Nation leader, WarSide side)
     {
         if (!settings.callAllies && !settings.vassalsFollowOverlord) return;
         RelationshipManager rel = Rel;
         IReadOnlyList<Nation> all = World.Nations;
+        Nation other = World.GetNation(side == WarSide.Attacker ? war.DefenderId : war.AttackerId);
 
         for (int i = 0; i < all.Count; i++)
         {
             Nation o = all[i];
             if (o == leader || o.IsEmpty || war.SideOf(o.Id) != WarSide.None) continue;
-            Nation other = side == WarSide.Attacker ? World.GetNation(war.DefenderId) : World.GetNation(war.AttackerId);
-            if (other != null && rel.IsAllied(other, o) && rel.IsAllied(leader, o)) continue;
+            if (other != null && rel.IsAllied(other, o) && rel.IsAllied(leader, o)) continue;   // allied to both: stays out
 
             bool join = false;
             if (settings.callAllies && rel.IsAllied(leader, o)) join = true;
             else if (settings.callAllies && settings.callDefensivePacts && side == WarSide.Defender && rel.HasDefensivePact(leader, o)) join = true;
-            else if (settings.vassalsFollowOverlord && (rel.IsVassalOf(o, leader))) join = true;
+            else if (settings.vassalsFollowOverlord && rel.IsVassalOf(o, leader)) join = true;
 
             if (join) AddMember(war, o, side);
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  JOIN / LEAVE / CAPITULATE
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Join / leave / capitulate
+
     public bool JoinWar(War war, Nation nation, WarSide side)
     {
         LastError = null;
@@ -565,7 +520,7 @@ public class WarManager : TickBehaviour
         return true;
     }
 
-    /// <summary>Convenience: 'nation' joins the side that 'friend' fights on.</summary>
+    /// <summary>'nation' joins the side that 'friend' fights on.</summary>
     public bool JoinWarAlongside(Nation nation, Nation friend)
     {
         LastError = null;
@@ -581,7 +536,7 @@ public class WarManager : TickBehaviour
         OnNationJoined?.Invoke(war, n, side);
     }
 
-    /// <summary>A NON-main member leaves the war. Its occupations stay with the war.</summary>
+    /// <summary>A NON-main member leaves the war. What it occupied is released.</summary>
     public bool LeaveWar(War war, Nation nation)
     {
         LastError = null;
@@ -593,23 +548,21 @@ public class WarManager : TickBehaviour
         war.Defenders.Remove(nation.Id);
         Unregister(war, nation.Id);
 
-        // whatever it occupied is released
-        List<int> free = null;
-        foreach (var kv in war.Occupied) if (kv.Value == nation.Id) (free ?? (free = new List<int>())).Add(kv.Key);
-        if (free != null)
-            for (int i = 0; i < free.Count; i++)
-            {
-                war.Occupied.Remove(free[i]);
-                Province fp = _map != null ? _map.GetProvince(free[i]) : null;
-                if (fp != null) OnProvinceOccupationChanged?.Invoke(war, fp, null);
-            }
+        _idBuf.Clear();
+        foreach (var kv in war.Occupied) if (kv.Value == nation.Id) _idBuf.Add(kv.Key);
+        for (int i = 0; i < _idBuf.Count; i++)
+        {
+            war.Occupied.Remove(_idBuf[i]);
+            Province fp = _map != null ? _map.GetProvince(_idBuf[i]) : null;
+            if (fp != null) OnProvinceOccupationChanged?.Invoke(war, fp, null);
+        }
 
         RecalculateProgress(war);
         OnNationLeft?.Invoke(war, nation);
         return true;
     }
 
-    /// <summary>The nation gives up. A main belligerent loses the war (the other side wins), an ally simply leaves.</summary>
+    /// <summary>A main belligerent loses the war (the other side wins), an ally simply leaves.</summary>
     public bool Capitulate(War war, Nation loser)
     {
         LastError = null;
@@ -620,14 +573,14 @@ public class WarManager : TickBehaviour
         return EndWar(war, s == WarSide.Attacker ? WarResult.DefenderVictory : WarResult.AttackerVictory);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  PEACE / END
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Peace / end
+
     public bool WhitePeace(War war) => EndWar(war, WarResult.WhitePeace);
     public bool AttackerWins(War war) => EndWar(war, WarResult.AttackerVictory);
     public bool DefenderWins(War war) => EndWar(war, WarResult.DefenderVictory);
 
-    /// <summary>White peace between two nations: ends the war they fight each other in.</summary>
     public bool MakePeace(Nation a, Nation b)
     {
         LastError = null;
@@ -636,7 +589,6 @@ public class WarManager : TickBehaviour
         return EndWar(w, WarResult.WhitePeace);
     }
 
-    /// <summary>Ends every running war (white peace).</summary>
     public void EndAllWars()
     {
         _tmp.Clear();
@@ -645,7 +597,7 @@ public class WarManager : TickBehaviour
     }
 
     public bool CanDecide(War war, WarSide side) =>
-    war != null && !war.Ended && side != WarSide.None && war.ProgressOf(side) >= settings.decisionProgress;
+        war != null && !war.Ended && side != WarSide.None && war.ProgressOf(side) >= settings.decisionProgress;
 
     /// <summary>The side that reached decisionProgress picks what happens. Player UI and AI both call this.</summary>
     public bool Decide(War war, WarSide winner, WarOutcome outcome)
@@ -664,13 +616,12 @@ public class WarManager : TickBehaviour
                 return EndWar(war, WarResult.WhitePeace);
             case WarOutcome.Vassalize:
                 if (winMain == null || loseMain == null) return Fail("Nation missing.");
-                if (!EndWar(war, WarResult.WhitePeace)) return false;     // no land changes, the loser becomes a vassal
+                if (!EndWar(war, WarResult.WhitePeace)) return false;
                 return Rel.Vassalize(winMain, loseMain);
         }
         return false;
     }
 
-    /// <summary>War score the winner can spend on demands.</summary>
     public float GetDemandBudget(War war, WarSide winner) => war != null ? war.ProgressOf(winner) : 0f;
 
     /// <summary>War score price of one province. Average province of its owner = provinceScoreCost.</summary>
@@ -693,7 +644,7 @@ public class WarManager : TickBehaviour
         return Mathf.Max(0.5f, cost);
     }
 
-    /// <summary>The winner takes the listed provinces (any province of the losing side, occupied or not) if its progress pays for them.</summary>
+    /// <summary>The winner takes the listed provinces (occupied or not) if its progress pays for them.</summary>
     public bool Decide(War war, WarSide winner, IList<int> provinceIds)
     {
         LastError = null;
@@ -706,41 +657,26 @@ public class WarManager : TickBehaviour
         if (winMain == null) return Fail("Nation missing.");
 
         float budget = GetDemandBudget(war, winner), total = 0f;
-        var seen = new HashSet<int>();
+        _seen.Clear();
         for (int i = 0; i < provinceIds.Count; i++)
         {
             Province p = _map.GetProvince(provinceIds[i]);
-            if (p == null || p.Owner == null || !seen.Add(p.Id)) return Fail("Bad province in demand.");
+            if (p == null || p.Owner == null || !_seen.Add(p.Id)) return Fail("Bad province in demand.");
             if (war.SideOf(p.Owner.Id) != loser) return Fail("Province does not belong to the losing side.");
             total += GetProvinceCost(war, winner, p);
         }
         if (total > budget + 0.01f) return Fail("Demand costs " + total.ToString("F1") + " but only " + budget.ToString("F1") + " war score.");
 
         war.Claims.Clear();
-        foreach (int id in seen)
+        foreach (int id in _seen)
         {
-            // an ally that occupies it receives it, otherwise the main winner
             int receiver = war.Occupied.TryGetValue(id, out int occ) && war.SideOf(occ) == winner ? occ : winMain.Id;
             war.Claims[id] = receiver;
         }
         return EndWar(war, winner == WarSide.Attacker ? WarResult.AttackerVictory : WarResult.DefenderVictory);
     }
 
-    private void CheckDecision(War war, float a, float d)
-    {
-        float t = settings.decisionProgress;
-        if (a >= t) { if (!war.AttackerDecisionRaised) { war.AttackerDecisionRaised = true; OnWarDecisionAvailable?.Invoke(war, WarSide.Attacker); } }
-        else war.AttackerDecisionRaised = false;
-        if (d >= t) { if (!war.DefenderDecisionRaised) { war.DefenderDecisionRaised = true; OnWarDecisionAvailable?.Invoke(war, WarSide.Defender); } }
-        else war.DefenderDecisionRaised = false;
-    }
-
-    /// <summary>
-    /// Ends the war. Victory: the provinces occupied by the winning side change owner (to their occupier).
-    /// Always: truce between the two sides, relationship of the main nations lifted to 'relationAfterPeace'.
-    /// OnWarEnded is raised LAST: the war is already unregistered, so nations that are not at war any more are
-    /// no longer hostile (CombatManager uses this to end battles and send the armies back to the border).
-    /// </summary>
+    /// <summary>Victory transfers the occupied / claimed provinces. Always: truce + relation. OnWarEnded is raised LAST.</summary>
     public bool EndWar(War war, WarResult result)
     {
         LastError = null;
@@ -756,11 +692,12 @@ public class WarManager : TickBehaviour
 
         if (war.Occupied.Count > 0)
         {
-            var ids = new List<int>(war.Occupied.Keys);
+            _idBuf.Clear();
+            foreach (var kv in war.Occupied) _idBuf.Add(kv.Key);
             war.Occupied.Clear();
-            for (int i = 0; i < ids.Count; i++)
+            for (int i = 0; i < _idBuf.Count; i++)
             {
-                Province op = _map != null ? _map.GetProvince(ids[i]) : null;
+                Province op = _map != null ? _map.GetProvince(_idBuf[i]) : null;
                 if (op != null) OnProvinceOccupationChanged?.Invoke(war, op, null);
             }
         }
@@ -769,12 +706,13 @@ public class WarManager : TickBehaviour
         for (int i = 0; i < war.Attackers.Count; i++) Unregister(war, war.Attackers[i]);
         for (int i = 0; i < war.Defenders.Count; i++) Unregister(war, war.Defenders[i]);
 
-        // truce between everybody who fought on opposite sides
-        long end = DateManager.Instance.TotalDays + Mathf.Max(0, settings.truceDays);
         if (settings.truceDays > 0)
+        {
+            long end = DateManager.Instance.TotalDays + settings.truceDays;
             for (int i = 0; i < war.Attackers.Count; i++)
                 for (int j = 0; j < war.Defenders.Count; j++)
                     _truces[Key(war.Attackers[i], war.Defenders[j])] = end;
+        }
 
         Nation a = World.GetNation(war.AttackerId), d = World.GetNation(war.DefenderId);
         if (a != null && d != null && RelationshipManager.HasInstance)
@@ -793,33 +731,30 @@ public class WarManager : TickBehaviour
         if (source.Count == 0) return;
         WarSide loser = War.Opposite(winner);
 
-        var list = new List<KeyValuePair<int, int>>(source);
-        for (int i = 0; i < list.Count; i++)
+        _pairBuf.Clear();
+        foreach (var kv in source) _pairBuf.Add(kv);            // SetProvinceOwner may touch 'source' indirectly
+
+        for (int i = 0; i < _pairBuf.Count; i++)
         {
-            int pid = list[i].Key, occupier = list[i].Value;
+            int pid = _pairBuf[i].Key, receiver = _pairBuf[i].Value;
             Province p = _map != null ? _map.GetProvince(pid) : null;
             if (p == null || p.Owner == null) continue;
-            if (war.SideOf(occupier) != winner || war.SideOf(p.Owner.Id) != loser) continue;
+            if (war.SideOf(receiver) != winner || war.SideOf(p.Owner.Id) != loser) continue;
 
-            Nation target = World.GetNation(occupier);
+            Nation target = World.GetNation(receiver);
             if (target == null) continue;
 
-            Nation old = p.Owner;
-            if (_map != null && _map.IsReady) _map.SetProvinceOwner(pid, occupier);
+            if (_map != null && _map.IsReady) _map.SetProvinceOwner(pid, receiver);
             else World.AssignProvince(p, target);
-            OnProvinceOccupationChanged?.Invoke(war, p, null);   // occupation is over: it became an annexation
-            if (old.IsEmpty && ArmyManager.HasInstance) { /* ArmyManager cleans up through WorldManager events when removed */ }
+            OnProvinceOccupationChanged?.Invoke(war, p, null);   // occupation became an annexation
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  OCCUPATION & WAR SCORE
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
 
-    /// <summary>
-    /// 'occupier' (must be in the war) occupies a province owned by the OTHER side.
-    /// A newly occupied province also occupies up to settings.spreadProvinces neighbouring enemy provinces.
-    /// </summary>
+    #region Occupation (called by CombatManager's siege) & surrender
+
+    /// <summary>'occupier' (in the war) occupies a province owned by the OTHER side. May spread to neighbouring enemy provinces.</summary>
     public bool Occupy(War war, Nation occupier, Province province)
     {
         LastError = null;
@@ -833,7 +768,7 @@ public class WarManager : TickBehaviour
         if (ownerSide == mine) return Fail("That province belongs to the occupier's own side.");
 
         bool wasOccupied = war.Occupied.TryGetValue(province.Id, out int prev);
-        if (wasOccupied && war.SideOf(prev) == mine) return Fail("Already occupied by this side.");   // any ally counts
+        if (wasOccupied && war.SideOf(prev) == mine) return Fail("Already occupied by this side.");
 
         war.Occupied[province.Id] = occupier.Id;
         war.LastActivityDay = DateManager.Instance.TotalDays;
@@ -844,16 +779,17 @@ public class WarManager : TickBehaviour
         if (!wasOccupied) SpreadOccupation(war, occupier, province, mine);
         RecalculateProgress(war);
 
-        Nation[] victims = _owners.ToArray();               // surrender can end wars, so work on a copy
+        // surrender can end wars (and re-enter this class): work on a private snapshot of the victims
+        _victims.Clear();
+        for (int i = 0; i < _owners.Count; i++) if (!_victims.Contains(_owners[i])) _victims.Add(_owners[i]);
+        Nation[] victims = _victims.ToArray();
         for (int i = 0; i < victims.Length; i++) CheckSurrender(victims[i]);
         return true;
     }
 
-    /// <summary>Occupies up to settings.spreadProvinces random neighbours of 'origin' that belong to the enemy side.</summary>
     private void SpreadOccupation(War war, Nation occupier, Province origin, WarSide mine)
     {
-        int count = settings.spreadProvinces;
-        if (count < 0 || _map == null || origin.Neighbors == null) return;   // -1 = off
+        if (_map == null || origin.Neighbors == null) return;
 
         _spreadBuf.Clear();
         int[] nb = origin.Neighbors;
@@ -862,18 +798,19 @@ public class WarManager : TickBehaviour
             Province q = _map.GetProvince(nb[i]);
             if (q == null || q.Owner == null) continue;
             WarSide os = war.SideOf(q.Owner.Id);
-            if (os == WarSide.None || os == mine) continue;                         // only enemy land
-            if (war.Occupied.ContainsKey(q.Id)) continue;                           // already occupied
-            if (CombatManager.HasInstance && !CombatManager.Instance.CanTakeProvince(war, occupier, q)) continue;   // enemy fighters / battle there
+            if (os == WarSide.None || os == mine) continue;                       // only enemy land
+            if (war.Occupied.ContainsKey(q.Id)) continue;
+            if (CombatManager.HasInstance && !CombatManager.Instance.CanTakeProvince(war, occupier, q)) continue;   // enemy fighters there
             _spreadBuf.Add(q);
         }
 
-        int take = count == 0 ? _spreadBuf.Count : count;                           // 0 = all neighbours
+        int take = settings.spreadProvinces == 0 ? _spreadBuf.Count : settings.spreadProvinces;
         for (int n = 0; n < take && _spreadBuf.Count > 0 && !war.Ended; n++)
         {
             int idx = RNG.GetInt(0, _spreadBuf.Count);
             Province pick = _spreadBuf[idx];
-            _spreadBuf.RemoveAt(idx);
+            _spreadBuf[idx] = _spreadBuf[_spreadBuf.Count - 1];                   // swap-remove
+            _spreadBuf.RemoveAt(_spreadBuf.Count - 1);
 
             war.Occupied[pick.Id] = occupier.Id;
             _owners.Add(pick.Owner);
@@ -887,21 +824,24 @@ public class WarManager : TickBehaviour
     {
         LastError = null;
         if (war == null || war.Ended) return Fail("War is not running.");
-        if (province == null || !war.Occupied.TryGetValue(province.Id, out int occ)) return Fail("Province is not occupied in this war.");
+        if (province == null || !war.Occupied.Remove(province.Id)) return Fail("Province is not occupied in this war.");
 
-        war.Occupied.Remove(province.Id);
         war.LastActivityDay = DateManager.Instance.TotalDays;
-
         OnProvinceOccupationChanged?.Invoke(war, province, null);
-        RecalculateProgress(war);                         // a liberated capital takes its progress back
+        RecalculateProgress(war);                                // a liberated capital takes its progress back
         return true;
     }
+
     /// <summary>True when EVERY province of n is occupied by an enemy in some war n fights.</summary>
     private bool FullyOccupied(Nation n)
     {
         if (n == null || n.IsEmpty) return false;
         IReadOnlyList<War> wars = GetWars(n);
         if (wars.Count == 0) return false;
+
+        int total = 0;                                           // cheap reject: not enough occupied entries at all
+        for (int w = 0; w < wars.Count; w++) total += wars[w].Occupied.Count;
+        if (total < n.Provinces.Count) return false;
 
         for (int i = 0; i < n.Provinces.Count; i++)
         {
@@ -922,12 +862,13 @@ public class WarManager : TickBehaviour
     private void CheckSurrender(Nation n)
     {
         if (!FullyOccupied(n)) return;
-        var wars = new List<War>(GetWars(n));
-        for (int i = 0; i < wars.Count; i++)
-            if (!wars[i].Ended) Capitulate(wars[i], n);
+        _tmpSurrender.Clear();
+        _tmpSurrender.AddRange(GetWars(n));
+        for (int i = 0; i < _tmpSurrender.Count; i++)
+            if (!_tmpSurrender[i].Ended) Capitulate(_tmpSurrender[i], n);
     }
 
-    /// <summary>Adds permanent progress (percent): positive = attacker side, negative = defender side. Never ends the war.</summary>
+    /// <summary>Adds permanent progress (percent): positive = attacker side, negative = defender side.</summary>
     public bool AddWarScore(War war, float amount)
     {
         LastError = null;
@@ -938,21 +879,14 @@ public class WarManager : TickBehaviour
         return true;
     }
 
-    public int CountOccupied(War war, WarSide bySide)
-    {
-        int c = 0;
-        foreach (var kv in war.Occupied) if (war.SideOf(kv.Value) == bySide) c++;
-        return c;
-    }
+    #endregion
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  WAR PROGRESS (0..100 % per side). At 100 % NOTHING happens (AI / player decide later).
-    //   capital of the enemy main nation occupied   : +capitalOccupiedPercent   (20)
-    //   enemy main nation's army destroyed          : +armyDestroyedPercent     (30)
-    //   ALL provinces of the enemy main nation held : +allProvincesPercent      (50)
-    //   side with more occupied provinces           : +monthlyLeadPercent every month (5, permanent)
-    //  The first three are live: they disappear again when the situation is reversed (capital liberated ...).
-    // ─────────────────────────────────────────────────────────────────────
+    #region War progress (0..100 % per side, nothing happens at 100)
+
+    //  capital of the enemy main nation occupied : +capitalOccupiedPercent
+    //  enemy main nation's army destroyed        : +armyDestroyedPercent
+    //  ALL provinces of the enemy main nation    : +allProvincesPercent
+    //  more occupied provinces                   : +monthlyLeadPercent every month (permanent)
     private void RecalculateProgress(War war)
     {
         if (war == null || war.Ended) return;
@@ -967,15 +901,21 @@ public class WarManager : TickBehaviour
         OnWarProgressChanged?.Invoke(war);
     }
 
-    /// <summary>Progress that 'side' earns from the situation against the MAIN nation of the other side.</summary>
+    private void CheckDecision(War war, float a, float d)
+    {
+        float t = settings.decisionProgress;
+        if (a >= t) { if (!war.AttackerDecisionRaised) { war.AttackerDecisionRaised = true; OnWarDecisionAvailable?.Invoke(war, WarSide.Attacker); } }
+        else war.AttackerDecisionRaised = false;
+        if (d >= t) { if (!war.DefenderDecisionRaised) { war.DefenderDecisionRaised = true; OnWarDecisionAvailable?.Invoke(war, WarSide.Defender); } }
+        else war.DefenderDecisionRaised = false;
+    }
+
     private float Milestones(War war, WarSide side)
     {
-        int enemyId = side == WarSide.Attacker ? war.DefenderId : war.AttackerId;
-        Nation enemy = World.GetNation(enemyId);
+        Nation enemy = World.GetNation(side == WarSide.Attacker ? war.DefenderId : war.AttackerId);
         if (enemy == null || enemy.IsEmpty) return 0f;
 
         float sum = 0f;
-
         Province cap = enemy.Capital;
         if (cap != null && war.Occupied.TryGetValue(cap.Id, out int occ) && war.SideOf(occ) == side)
             sum += settings.capitalOccupiedPercent;
@@ -1004,15 +944,16 @@ public class WarManager : TickBehaviour
     private static bool AllProvincesOccupied(War war, Nation enemy, WarSide side)
     {
         IReadOnlyList<Province> list = enemy.Provinces;
-        if (list.Count == 0) return false;
+        if (list.Count == 0 || war.Occupied.Count < list.Count) return false;     // cheap reject
         for (int i = 0; i < list.Count; i++)
             if (!war.Occupied.TryGetValue(list[i].Id, out int occ) || war.SideOf(occ) != side) return false;
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  INTERNAL
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Internal helpers
+
     private static long Key(int a, int b) =>
         a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
 
@@ -1024,11 +965,9 @@ public class WarManager : TickBehaviour
 
     private void Unregister(War w, int nationId)
     {
-        if (_byNation.TryGetValue(nationId, out List<War> l))
-        {
-            l.Remove(w);
-            if (l.Count == 0) _byNation.Remove(nationId);
-        }
+        if (!_byNation.TryGetValue(nationId, out List<War> l)) return;
+        l.Remove(w);
+        if (l.Count == 0) _byNation.Remove(nationId);
     }
 
     private bool Check(Nation a, Nation b)
@@ -1041,17 +980,12 @@ public class WarManager : TickBehaviour
         return true;
     }
 
-    private bool Fail(string message)
-    {
-        LastError = message;
-        return false;
-    }
+    private bool Fail(string message) { LastError = message; return false; }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  CONTEXT MENU  (Inspector, play mode, after the map is generated)
-    //   A = attacker, B = defender, C = third nation. -1 = RANDOM. Results go to the Console.
-    //   "Force" items ignore every condition.
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Context menu (-1 = random nation / province; "FORCE" ignores every condition)
+
     [ContextMenu("War: Declare War (A -> B, needs relation < threshold)")]
     private void MenuDeclare() => RunMenu("Declare War", (a, b) => DeclareWar(a, b, false) != null);
 
@@ -1104,7 +1038,7 @@ public class WarManager : TickBehaviour
     private void MenuEndAll() { EndAllWars(); RefreshView(); Debug.Log("[War] All wars ended."); }
 
     [ContextMenu("War: Clear Truce (A <-> B)")]
-    private void MenuClearTruce() => RunMenu("Clear truce", (a, b) => _truces.Remove(Key(a.Id, b.Id)) || true);
+    private void MenuClearTruce() => RunMenu("Clear truce", (a, b) => { _truces.Remove(Key(a.Id, b.Id)); return true; });
 
     [ContextMenu("War: Log War")]
     private void MenuLog() => RunMenu("Log", (a, b) => true);
@@ -1134,18 +1068,13 @@ public class WarManager : TickBehaviour
     {
         a = b = null;
         WorldManager w = World;
-        if (w == null || w.NationCount < 2)
-        {
-            Debug.LogWarning("[War] Need at least 2 nations (generate the map first).");
-            return false;
-        }
+        if (w == null || w.NationCount < 2) { Debug.LogWarning("[War] Need at least 2 nations (generate the map first)."); return false; }
 
         a = debugNationA >= 0 ? w.GetNation(debugNationA) : w.GetRandomNation();
         if (a == null) { Debug.LogWarning("[War] Nation A not found."); return false; }
 
         if (debugNationB >= 0) b = w.GetNation(debugNationB);
-        else
-            for (int tries = 0; tries < 32 && (b == null || b == a); tries++) b = w.GetRandomNation();
+        else for (int t = 0; t < 32 && (b == null || b == a); t++) b = w.GetRandomNation();
 
         if (b == null || b == a) { Debug.LogWarning("[War] Nation B not found (or equals A)."); return false; }
         return true;
@@ -1156,11 +1085,10 @@ public class WarManager : TickBehaviour
         WorldManager w = World;
         if (debugNationC >= 0) return w.GetNation(debugNationC);
         Nation c = null;
-        for (int tries = 0; tries < 32 && (c == null || c == a || c == b); tries++) c = w.GetRandomNation();
+        for (int t = 0; t < 32 && (c == null || c == a || c == b); t++) c = w.GetRandomNation();
         return c;
     }
 
-    /// <summary>debugProvince, or (-1) a RANDOM province of 'owner'.</summary>
     private Province PickProvince(Nation owner)
     {
         if (_map == null) return null;
@@ -1174,8 +1102,8 @@ public class WarManager : TickBehaviour
         War w = GetWar(a, b);
         string rel = RelationshipManager.HasInstance ? Rel.GetValue(a, b).ToString("F1") : "?";
         if (w == null) return $"no war, relation {rel}, truce {TruceDaysLeft(a, b)}d";
-        return $"war #{w.Id} progress A {w.AttackerProgress:F0}% / D {w.DefenderProgress:F0}%, days {w.DaysActive}, attackers {SideText(w.Attackers)}, defenders {SideText(w.Defenders)}, " +
-               $"occupied {w.Occupied.Count}, relation {rel}";
+        return $"war #{w.Id} progress A {w.AttackerProgress:F0}% / D {w.DefenderProgress:F0}%, days {w.DaysActive}, " +
+               $"attackers {SideText(w.Attackers)}, defenders {SideText(w.Defenders)}, occupied {w.Occupied.Count}, relation {rel}";
     }
 
     private string SideText(List<int> ids)
@@ -1190,9 +1118,10 @@ public class WarManager : TickBehaviour
         return sb.ToString();
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  INSPECTOR VIEW
-    // ─────────────────────────────────────────────────────────────────────
+    #endregion
+
+    #region Diagnostics (Editor mirror, throttled by diagnosticsInterval)
+
     private void RefreshView()
     {
 #if UNITY_EDITOR
@@ -1216,4 +1145,6 @@ public class WarManager : TickBehaviour
         }
 #endif
     }
+
+    #endregion
 }

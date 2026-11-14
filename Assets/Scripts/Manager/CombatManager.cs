@@ -477,11 +477,14 @@ public class CombatManager : TickBehaviour
             _reinforceCursor = idx + 1;
             Military m = mils[idx];
             for (int i = 0; i < m.Regiments.Count && budget > 0; i++)
-                if (TryReinforce(m.Regiments[i])) budget--;
-        }
+            {
+                if (AIManager.HasInstance && !AIManager.Instance.AllowReinforce(m.Regiments[i])) continue;
+                if (TryReinforce(m.Regiments[i], settings.maxColumnsPerRegiment)) budget--;
+            }
+        }        
     }
 
-    private bool TryReinforce(Regiment u)
+    private bool TryReinforce(Regiment u, int maxCols)
     {
         if (u.IsColumn || u.Military == null) return false;
         if (u.State == RegimentState.Retreating || u.State == RegimentState.Moving) return false;
@@ -497,7 +500,7 @@ public class CombatManager : TickBehaviour
             Regiment col = m.Columns[c];
             if (col.Role == ColumnRole.Merge && col.MergeTarget == u) { incoming += col.Manpower; cols++; }
         }
-        if (cols >= settings.maxColumnsPerRegiment) return false;
+        if (cols >= maxCols) return false;
 
         ArmyManager army = ArmyManager.Instance;
         double need = alloc - u.Manpower - incoming;
@@ -518,6 +521,8 @@ public class CombatManager : TickBehaviour
         if (!army.MoveRegiment(column, dest)) { m.RemoveColumn(column); return false; }
         return true;
     }
+    /// <summary>Used by the AI (Reserve Surge): bypasses the 'below percent' check, allows more columns.</summary>
+    public bool ForceReinforce(Regiment u, int maxCols) => TryReinforce(u, maxCols);
 
     /// <summary>A main regiment retreats: its columns follow it.</summary>
     private void HandleRetreat(Regiment r, Province target)
@@ -551,7 +556,9 @@ public class CombatManager : TickBehaviour
         if (near)
         {
             double room = Math.Max(0.0, t.Allocation - t.Manpower);
-            t.Manpower += Math.Min(r.Manpower, room);                 // the rest stays in the reserve
+            double add = Math.Min(r.Manpower, room);
+            t.Manpower += add;
+            r.Manpower -= add;                     // the rest is refunded by RemoveColumn
             t.RefreshText();
             m.RemoveColumn(r);
         }
@@ -631,6 +638,7 @@ public class CombatManager : TickBehaviour
 
                         // progress per day = 1 / (1 + Defend / divisor): strong defence = slower siege
                         s.Progress += 1f / (1f + Mathf.Max(0f, p.Defend.Value) / Mathf.Max(0.01f, settings.defendDivisor));
+                        wm.MarkActivity(war);
                         if (s.Progress >= settings.occupyDays)
                         {
                             _sieges.Remove(p.Id);

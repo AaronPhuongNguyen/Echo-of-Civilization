@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,6 +110,32 @@ public class PlayerManager : MonoBehaviour
         Nation n = startNationId >= 0 ? w.GetNation(startNationId) : null;
         if (n == null || n.IsEmpty) n = w.GetRandomNation();
         SetPlayer(n);
+    }
+
+    /// <summary>Fog of War: should the army cards of 'n' be drawn? Called by ArmyManager (cheap dictionary lookups only).</summary>
+    public bool IsArmyVisible(Nation n)
+    {
+        if (n == null) return false;
+        if (!useFogOfWar) return true;
+
+        WarManager wm = WarManager.HasInstance ? WarManager.Instance : null;
+        if (wm == null) return PlayerNation == null || n == PlayerNation;
+
+        Nation p = PlayerNation;
+        if (p == null) return wm.IsAtWar(n);            // spectator: only the war sides
+        if (n == p) return true;
+        if (wm.IsAtWar(p, n)) return true;              // enemy of the player
+
+        if (RelationshipManager.HasInstance)            // ally / overlord / vassal
+        {
+            RelationshipManager rel = RelationshipManager.Instance;
+            if (rel.IsAllied(p, n) || rel.IsVassalOf(n, p) || rel.IsVassalOf(p, n)) return true;
+        }
+
+        IReadOnlyList<War> wars = wm.GetWars(p);        // same side in a war
+        for (int i = 0; i < wars.Count; i++)
+            if (wars[i].SideOf(n.Id) == wars[i].SideOf(p.Id)) return true;
+        return false;
     }
 
     /// <summary>Makes 'n' the player nation (null = no player). The old player nation becomes AI.</summary>
