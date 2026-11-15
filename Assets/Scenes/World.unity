@@ -905,21 +905,21 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   settings:
-    economyIntervalDays: 6
+    economyIntervalDays: 7
     diplomacyIntervalDays: 90
-    militaryInterval: 3
+    militaryInterval: 1.5
     nationsPerTick: 6
-    thinkBudgetMs: 2
-    snapshotInterval: 0.4
+    thinkBudgetMs: 3
+    snapshotInterval: 0.3
     counterAttackAfterDays: 14
     demandSpend: 1
     maxDemandProvinces: 50
     minDemandTouch: 0.4
-    surrenderChance: 0.05
+    surrenderChance: 0.04
     aggressionRange: {x: 0.1, y: 0.9}
     friendlinessRange: {x: 0.2, y: 0.9}
     peaceReserve: 0.12
-    warReserve: 0.25
+    warReserve: 0.15
     maxIncreasesPerRound: 8
     sampleProvinces: 8
     maxQueuePerProvince: 16
@@ -929,46 +929,53 @@ MonoBehaviour:
     economyWeight: 3
     infrastructureWeight: 2
     defendWeight: 1
-    newRegimentFullness: 0.6
+    newRegimentFullness: 0.95
     peacePrepLevel: 1
     alertMaxPrepLevel: 7
     alertThreshold: 0.25
-    attackRatio: 1.25
-    defendRatio: 1.15
+    attackRatio: 1.3
+    defendRatio: 1.2
     minAttackStrength: 0.6
     minDefendStrength: 0.25
     attackerDefendShare: 0.35
     provinceDefendWeight: 2000
-    queryRadiusTiles: 14
+    queryRadiusTiles: 35
     manageShares: 1
-    shareInterval: 8
-    liberationShare: 0.5
-    maxLiberators: 3
-    reinforceCheck: 4
+    shareInterval: 4
+    commitRatio: 0.75
+    gatherTiles: 6
+    warRefillBelow: 0.92
+    warColumnPercent: 0.3
+    warColumnsPerRegiment: 4
+    warColumnsPerThink: 8
+    elasticBelow: 0.3
+    liberationShare: 0.4
+    maxLiberators: 8
+    reinforceCheck: 2
     surgeColumns: 3
     useTactics: 1
     showTacticVisuals: 1
-    tacticInterval: 8
-    tacticCooldown: 45
+    tacticInterval: 4
+    tacticCooldown: 20
     visualsPerSecond: 3
-    siegeMinRegiments: 3
-    siegeMaxSlots: 6
+    siegeMinRegiments: 2
+    siegeMaxSlots: 12
     opTimeout: 60
-    massReadyFraction: 0.75
+    massReadyFraction: 0.6
     warMinPowerRatio: 1.6
     fearRatio: 1.2
     warChancePerCheck: 0.3
     maxWars: 1
-    minDaysBetweenWars: 360
+    minDaysBetweenWars: 720
     improveUntil: 45
     stalemateDays: 1080
-    allowVassalize: 0
+    allowVassalize: 1
     mergeProvinces: 1
     mergeGoalRange: {x: 45, y: 60}
-    mergeIntervalDays: 12
+    mergeIntervalDays: 30
     mergeSmallFactor: 0.6
-    mergeGroupSize: 3
-    mergeNewNameChance: 0.4
+    mergeGroupSize: 6
+    mergeNewNameChance: 0.3
     mergeOnlyInPeace: 1
     mergePerTick: 1
   map: {fileID: 0}
@@ -1306,42 +1313,43 @@ MonoBehaviour:
   settings:
     combatInterval: 0.1
     autoMinRadius: 1
-    damageScale: 0.03
+    damageScale: 0.003
+    defenseRatio: 1000
     useDice: 1
     diceBonus:
       Base: 0.5
       Flat: 0
       Percent: 0
       Total: 1
-    diceRollDays: 5
-    diceBuffDays: 4
-    pushStartShare: 0.5
-    pushFullShare: 0.75
-    pushSpeedFactor: 0.3
+    diceRollDays: 4
+    diceBuffDays: 3
+    pushStartShare: 0.4
+    pushFullShare: 0.8
+    pushSpeedFactor: 0.2
     winnersFollow: 1
     occupyDays: 3
     defendDivisor: 1
     occupyOnPath: 1
-    pathOccupyDefendLimit: 0
+    pathOccupyDefendLimit: 1
     reinforcements: 1
     reinforceInterval: 1
-    reinforceBelowPercent: 99
-    columnPercent: 15
-    minColumnManpower: 50
-    maxColumnsPerRegiment: 3
-    mergeRadiusTiles: 3
-    maxNewColumnsPerScan: 12
+    reinforceBelowPercent: 95
+    columnPercent: 25
+    minColumnManpower: 200
+    maxColumnsPerRegiment: 4
+    mergeRadiusTiles: 4
+    maxNewColumnsPerScan: 24
     occupationColumns: 1
-    occupierIntervalDays: 7
-    occupierPercent: 5
-    occupierMinManpower: 100
-    maxOccupiersPerNation: 3
-    occupierMaxHops: 4
+    occupierIntervalDays: 4
+    occupierPercent: 8
+    occupierMinManpower: 300
+    maxOccupiersPerNation: 4
+    occupierMaxHops: 5
     returnToBorderAfterWar: 1
   map: {fileID: 0}
-  trailAlpha: 0.75
+  trailAlpha: 0.6
   overlayMaxSize: 1024
-  overlaySortingOrder: 2
+  overlaySortingOrder: 3
   debugNationA: -1
   debugNationB: -1
   debugRegiment: -1
