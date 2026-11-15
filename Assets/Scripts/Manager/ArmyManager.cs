@@ -32,7 +32,7 @@ public sealed class Military
     #region Combat stats
 
     public readonly GameValue AttackPerMan = new GameValue(5f);
-    public readonly GameValue DefendPerMan = new GameValue(6.5f);
+    public readonly GameValue DefendPerMan = new GameValue(3f);
     public readonly GameValue HpPerMan = new GameValue(5f);
     public readonly GameValue DamageMultiplier = new GameValue(1f);
 

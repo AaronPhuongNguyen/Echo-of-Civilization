@@ -13,20 +13,22 @@ public class CombatSettings
     public bool autoMinRadius = true;
 
     [Header("Damage")]
-    [Tooltip("hp = ATK^2 / (ATK + DEF) * damageScale * damageMultiplier * seconds.")]
-    [Min(0.00001f)] public float damageScale = 0.005f;
+    [Tooltip("hp = ATK * Ratio / (DEF + Ratio) * damageScale * damageMultiplier * seconds.")]
+    [Min(0.00001f)] public float damageScale = 0.003f;
+    [Tooltip("Damage = ATK * Ratio / (DEF + Ratio). DEF equal to Ratio halves the damage.")]
+    [Min(1f)] public float defenseRatio = 1000f;
 
     [Header("Dice (only buff in the game)")]
     public bool useDice = true;
     public GameValue diceBonus = new GameValue(0.5f);
-    [Min(1)] public int diceRollDays = 7;
-    [Min(0)] public int diceBuffDays = 6;
+    [Min(1)] public int diceRollDays = 4;
+    [Min(0)] public int diceBuffDays = 3;
 
     [Header("Battle push (per BATTLE / Combat View, not per army)")]
-    [Range(0.5f, 1f)] public float pushStartShare = 0.5f;
-    [Range(0.5f, 1f)] public float pushFullShare = 0.9f;
+    [Range(0.5f, 1f)] public float pushStartShare = 0.4f;
+    [Range(0.5f, 1f)] public float pushFullShare = 0.8f;
     [Tooltip("Front speed at full push, as a share of the march speed.")]
-    [Range(0f, 1f)] public float pushSpeedFactor = 0.3f;
+    [Range(0f, 1f)] public float pushSpeedFactor = 0.2f;
     [Tooltip("Marching regiments of the winning side follow the shoved enemy.")]
     public bool winnersFollow = true;
 
@@ -36,25 +38,25 @@ public class CombatSettings
 
     [Header("Occupy on the march")]
     public bool occupyOnPath = true;
-    [Min(0f)] public float pathOccupyDefendLimit = 2f;
+    [Min(0f)] public float pathOccupyDefendLimit = 1f;
 
     [Header("Reinforcement")]
     public bool reinforcements = true;
-    [Min(0.1f)] public float reinforceInterval = 3f;
-    [Range(1f, 100f)] public float reinforceBelowPercent = 99f;
-    [Range(1f, 100f)] public float columnPercent = 15f;
-    [Min(1f)] public float minColumnManpower = 50f;
-    [Min(1)] public int maxColumnsPerRegiment = 3;
-    [Min(0f)] public float mergeRadiusTiles = 3f;
-    [Min(1)] public int maxNewColumnsPerScan = 12;
+    [Min(0.1f)] public float reinforceInterval = 1f;
+    [Range(1f, 100f)] public float reinforceBelowPercent = 95f;
+    [Range(1f, 100f)] public float columnPercent = 25f;
+    [Min(1f)] public float minColumnManpower = 200f;
+    [Min(1)] public int maxColumnsPerRegiment = 4;
+    [Min(0f)] public float mergeRadiusTiles = 4f;
+    [Min(1)] public int maxNewColumnsPerScan = 24;
 
     [Header("Occupation columns")]
     public bool occupationColumns = true;
-    [Min(1)] public int occupierIntervalDays = 7;
-    [Range(0.1f, 50f)] public float occupierPercent = 5f;
-    [Min(1f)] public float occupierMinManpower = 100f;
-    [Min(1)] public int maxOccupiersPerNation = 3;
-    [Min(1)] public int occupierMaxHops = 4;
+    [Min(1)] public int occupierIntervalDays = 4;
+    [Range(0.1f, 50f)] public float occupierPercent = 8f;
+    [Min(1f)] public float occupierMinManpower = 300f;
+    [Min(1)] public int maxOccupiersPerNation = 4;
+    [Min(1)] public int occupierMaxHops = 5;
 
     [Header("After the war")]
     public bool returnToBorderAfterWar = true;
@@ -395,8 +397,8 @@ public class CombatManager : TickBehaviour
 
         if (_units.Count == 0) { EndBattles(); return; }
         _pendingDt = dt;
-        _batch.Schedule(_units.Count, cell, (int)DateManager.Instance.TotalDays, dt, settings.damageScale,
-            settings.useDice, settings.diceBonus.Value, settings.diceRollDays, settings.diceBuffDays);
+        _batch.Schedule(_units.Count, cell, (int)DateManager.Instance.TotalDays, dt, settings.damageScale, settings.defenseRatio,
+    settings.useDice, settings.diceBonus.Value, settings.diceRollDays, settings.diceBuffDays);
     }
 
     private void ApplyCombat()
@@ -632,10 +634,10 @@ public class CombatManager : TickBehaviour
         }
     }
 
-    private bool TryReinforce(Regiment u, int maxCols)
+    private bool TryReinforce(Regiment u, int maxCols, float colFraction = -1f, bool allowMoving = false)
     {
         if (u.IsColumn || u.Military == null) return false;
-        if (u.State == RegimentState.Retreating || u.State == RegimentState.Moving) return false;
+        if (u.State == RegimentState.Retreating || (u.State == RegimentState.Moving && !allowMoving)) return false;
 
         Military m = u.Military;
         double alloc = u.Allocation;
@@ -653,7 +655,8 @@ public class CombatManager : TickBehaviour
         ArmyManager army = ArmyManager.Instance;
         double need = alloc - u.Manpower - incoming;
         double free = m.CurrentManpower - m.TotalRegimentManpower();
-        double men = Math.Min(Math.Min(need, free), Math.Min(alloc * settings.columnPercent / 100.0, army.ColumnCapMen));
+        double frac = colFraction > 0f ? colFraction : settings.columnPercent / 100.0;
+        double men = Math.Min(Math.Min(need, free), Math.Min(alloc * frac, army.ColumnCapMen));
         bool lastTopUp = men >= need - 0.5;
         if (men < 1.0 || (men < settings.minColumnManpower && !lastTopUp)) return false;
 
@@ -665,12 +668,35 @@ public class CombatManager : TickBehaviour
         if (column == null) return false;
         column.Role = ColumnRole.Merge;
         column.MergeTarget = u;
-        Province dest = u.LocationProvince ?? u.Province;
+        Province dest = u.HasPath ? u.Destination : (u.LocationProvince ?? u.Province);
         if (!army.MoveRegiment(column, dest)) { m.RemoveColumn(column); return false; }
         return true;
     }
 
-    public bool ForceReinforce(Regiment u, int maxCols) => TryReinforce(u, maxCols);
+    public bool ForceReinforce(Regiment u, int maxCols, float colFraction = -1f, bool allowMoving = false) =>
+        TryReinforce(u, maxCols, colFraction, allowMoving);
+
+    /// <summary>Merges a Merge column into its regiment right now if it is close enough. True = the column is gone.</summary>
+    public bool TryMergeColumn(Regiment r)
+    {
+        if (r == null || r.Military == null || !r.IsColumn || r.Role != ColumnRole.Merge) return false;
+        Military m = r.Military;
+        Regiment t = r.MergeTarget;
+        if (t == null || t.Military != m) return false;
+
+        float radius = settings.mergeRadiusTiles * ArmyManager.Instance.TileSize;
+        bool near = (t.CurrentProvince != null && t.CurrentProvince == r.CurrentProvince) ||
+                    (t.WorldPosition - r.WorldPosition).sqrMagnitude <= radius * radius;
+        if (!near) return false;
+
+        double room = Math.Max(0.0, t.Allocation - t.Manpower);
+        double add = Math.Min(r.Manpower, room);
+        t.Manpower += add;
+        r.Manpower -= add;
+        t.RefreshText();
+        m.RemoveColumn(r);
+        return true;
+    }
 
     private void HandleRetreat(Regiment r, Province target)
     {
@@ -694,22 +720,8 @@ public class CombatManager : TickBehaviour
         Military m = r.Military;
         Regiment t = r.MergeTarget;
         if (t == null || t.Military != m) { m.RemoveColumn(r); return; }
-
-        ArmyManager army = ArmyManager.Instance;
-        float radius = settings.mergeRadiusTiles * army.TileSize;
-        bool near = (t.CurrentProvince != null && t.CurrentProvince == r.CurrentProvince) ||
-                    (t.WorldPosition - r.WorldPosition).sqrMagnitude <= radius * radius;
-
-        if (near)
-        {
-            double room = Math.Max(0.0, t.Allocation - t.Manpower);
-            double add = Math.Min(r.Manpower, room);
-            t.Manpower += add;
-            r.Manpower -= add;
-            t.RefreshText();
-            m.RemoveColumn(r);
-        }
-        else if (!army.MoveRegiment(r, t.LocationProvince)) m.RemoveColumn(r);
+        if (TryMergeColumn(r)) return;
+        if (!ArmyManager.Instance.MoveRegiment(r, t.Destination ?? t.LocationProvince)) m.RemoveColumn(r);
     }
 
     #endregion
@@ -943,7 +955,12 @@ public class CombatManager : TickBehaviour
         else _occupier.Remove(p.Id);
     }
 
-    private void HandleSpread(War w, Province p, Nation occupier) => PaintProvince(p, occupier);
+    private void HandleSpread(War w, Province p, Nation occupier)
+    {
+        if (p == null) return;
+        if (occupier != null) { _occupier[p.Id] = occupier.Id; PaintProvince(p, occupier); }
+        else { _occupier.Remove(p.Id); ClearProvincePixels(p); }
+    }
 
     #endregion
 

@@ -59,6 +59,7 @@ public class CombatViewManager : MonoBehaviour
 
     private readonly List<Raw> _raws = new List<Raw>();
     private readonly List<Grp> _groups = new List<Grp>();
+    // ---- Data (replace Raw / Grp / _raws / _groups) ----
     private readonly List<CombatView> _views = new List<CombatView>();
     private readonly List<CombatView> _voted = new List<CombatView>();
     private readonly Dictionary<int, CombatView> _uidView = new Dictionary<int, CombatView>();
@@ -124,12 +125,6 @@ public class CombatViewManager : MonoBehaviour
     private static bool Hostile(Nation a, Nation b) =>
         a != null && b != null && a != b && WarManager.HasInstance && WarManager.Instance.IsAtWar(a, b);
 
-    private int FindRaw(int x)
-    {
-        while (_raws[x].parent != x) { _raws[x].parent = _raws[_raws[x].parent].parent; x = _raws[x].parent; }
-        return x;
-    }
-
     private void Rebuild()
     {
         RectTransform root = GetRoot();
@@ -138,74 +133,31 @@ public class CombatViewManager : MonoBehaviour
         float now = Time.unscaledTime;
 
         bool show = _army.MarkersVisible;
-        float s = Mathf.Clamp(_army.CardScale, minScale, maxScale);
-        float w = width * s, h = height * s;
         PlayerManager pm = PlayerManager.HasInstance ? PlayerManager.Instance : null;
-
-        // 1) battles -> world centroid + screen position
         int rc = show && _src != null ? Mathf.Min(_srcCount, maxViews) : 0;
-        while (_raws.Count < rc) _raws.Add(new Raw());
+
+        // one battle = one view
         for (int i = 0; i < rc; i++)
         {
-            Raw r = _raws[i];
-            r.units = _src[i]; r.parent = i; r.group = -1; r.men = 0.0; r.valid = false;
+            List<Regiment> units = _src[i];
+
+            double men = 0.0;
             Vector3 c = Vector3.zero;
-            for (int k = 0; k < r.units.Count; k++)
+            for (int k = 0; k < units.Count; k++)
             {
-                Regiment u = r.units[k];
+                Regiment u = units[k];
                 if (u.Military == null || u.Manpower <= 0.5) continue;
                 c += u.WorldPosition * (float)u.Manpower;
-                r.men += u.Manpower;
+                men += u.Manpower;
             }
-            if (r.men <= 0.0) continue;
-            r.world = c / (float)r.men;
-            r.valid = _army.TryWorldToCanvas(r.world, out r.local);
-        }
+            if (men <= 0.0) continue;
+            Vector3 world = c / (float)men;
 
-        // 2) merge overlapping (screen space)
-        for (int i = 0; i < rc; i++)
-        {
-            if (!_raws[i].valid) continue;
-            for (int j = i + 1; j < rc; j++)
-            {
-                if (!_raws[j].valid) continue;
-                Vector2 d = _raws[i].local - _raws[j].local;
-                if (Mathf.Abs(d.x) < w && Mathf.Abs(d.y) < h)
-                {
-                    int a = FindRaw(i), b = FindRaw(j);
-                    if (a != b) _raws[a].parent = b;
-                }
-            }
-        }
-
-        int gc = 0;
-        for (int i = 0; i < rc; i++)
-        {
-            Raw r = _raws[i];
-            if (!r.valid) continue;
-            Raw top = _raws[FindRaw(i)];
-            if (top.group < 0)
-            {
-                top.group = gc;
-                if (gc >= _groups.Count) _groups.Add(new Grp());
-                Grp ng = _groups[gc++];
-                ng.units.Clear(); ng.wsum = Vector3.zero; ng.men = 0.0;
-            }
-            Grp g = _groups[top.group];
-            g.units.AddRange(r.units);
-            g.wsum += r.world * (float)r.men;
-            g.men += r.men;
-        }
-
-        // 3) group -> view (reuse the view that already shows most of these regiments)
-        for (int gi = 0; gi < gc; gi++)
-        {
-            Grp g = _groups[gi];
-            if (g.men <= 0.0) continue;
+            // reuse the view that already shows most of these regiments
             CombatView best = null; int bestV = 0;
-            for (int k = 0; k < g.units.Count; k++)
+            for (int k = 0; k < units.Count; k++)
             {
-                Regiment u = g.units[k];
+                Regiment u = units[k];
                 if (u.Military == null) continue;
                 if (_uidView.TryGetValue(u.Uid, out CombatView v) && v != null && v.Claim != _stamp)
                 {
@@ -220,10 +172,10 @@ public class CombatViewManager : MonoBehaviour
             if (best == null) continue;
             best.Claim = _stamp;
             best.LastSeen = now;
-            best.SetVisible(Fill(best, g, g.wsum / (float)g.men, pm));
+            best.SetVisible(Fill(best, units, world, pm));
         }
 
-        // 4) views nobody claimed: grace, then release
+        // views nobody claimed: grace, then release
         for (int i = _views.Count - 1; i >= 0; i--)
         {
             CombatView v = _views[i];
@@ -236,13 +188,13 @@ public class CombatViewManager : MonoBehaviour
         }
     }
 
-    private bool Fill(CombatView v, Grp g, Vector3 world, PlayerManager pm)
+    private bool Fill(CombatView v, List<Regiment> units, Vector3 world, PlayerManager pm)
     {
         Nation anchorN = null, bigN = null;
         double bm = -1.0;
-        for (int k = 0; k < g.units.Count; k++)
+        for (int k = 0; k < units.Count; k++)
         {
-            Regiment u = g.units[k];
+            Regiment u = units[k];
             if (u.Military == null) continue;
             _uidView[u.Uid] = v;
             Nation n = u.Military.Nation;
@@ -257,9 +209,9 @@ public class CombatViewManager : MonoBehaviour
 
         double a = 0.0, b = 0.0, ma = -1.0, mb = -1.0;
         Nation na = null, nb = null;
-        for (int k = 0; k < g.units.Count; k++)
+        for (int k = 0; k < units.Count; k++)
         {
-            Regiment u = g.units[k];
+            Regiment u = units[k];
             if (u.Military == null) continue;
             Nation n = u.Military.Nation;
             if (n != anchorN && Hostile(anchorN, n)) { b += u.Manpower; if (u.Manpower > mb) { mb = u.Manpower; nb = n; } }
@@ -271,7 +223,6 @@ public class CombatViewManager : MonoBehaviour
         v.Apply(na, nb, (float)a, (float)b, world);
         return true;
     }
-
     #endregion
 
     #region View pooling / root

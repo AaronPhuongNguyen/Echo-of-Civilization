@@ -170,8 +170,8 @@ public sealed class CombatBatch : IDisposable
     }
 
     /// <param name="cell">Grid cell size: must be >= the largest outer radius.</param>
-    public void Schedule(int count, float cell, int day, float dt, float damageScale, bool useDice, float diceBonus,
-                         int rollDays, int buffDays)
+    public void Schedule(int count, float cell, int day, float dt, float damageScale, float defRatio, bool useDice, float diceBonus,
+                     int rollDays, int buffDays)
     {
         if (count <= 0 || Pending) return;
         int table = Mathf.NextPowerOfTwo(Mathf.Max(64, count * 2));
@@ -219,6 +219,7 @@ public sealed class CombatBatch : IDisposable
             day = day,
             dt = dt,
             damageScale = damageScale,
+            defRatio = Mathf.Max(0.0001f, defRatio),
             useDice = useDice ? 1 : 0,
             diceBonus = diceBonus,
             rollDays = Mathf.Max(1, rollDays),
@@ -303,7 +304,7 @@ public sealed class CombatBatch : IDisposable
         [WriteOnly] public NativeArray<int> outNear;
 
         public int count, mask, nationCap, day, useDice, rollDays, buffDays;
-        public float invCell, dt, damageScale, diceBonus;
+        public float invCell, dt, damageScale, diceBonus, defRatio;
 
         private static uint Hash(uint a, uint b)
         {
@@ -371,7 +372,7 @@ public sealed class CombatBatch : IDisposable
 
                         float atkJ = men[j] * atk[j] * mj;
                         float defIt = menI * defI * mi;
-                        float eff = atkJ > 0f ? atkJ * atkJ / (atkJ + defIt) : 0f;
+                        float eff = atkJ * defRatio / (defIt + defRatio);
                         hp += eff * damageScale * dmg[j] * dt;
                     }
                 }

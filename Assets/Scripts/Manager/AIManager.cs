@@ -14,14 +14,14 @@ using math = Unity.Mathematics.math;
 public class AISettings
 {
     [Header("Timing / performance")]
-    [Min(1)] public int economyIntervalDays = 6;
+    [Min(1)] public int economyIntervalDays = 7;
     [Min(1)] public int diplomacyIntervalDays = 90;
-    [Min(0.2f)] public float militaryInterval = 3f;
+    [Min(0.2f)] public float militaryInterval = 1.5f;
     [Min(1)] public int nationsPerTick = 6;
     [Tooltip("Real milliseconds per tick the AI may spend thinking (at least one nation always thinks).")]
-    [Min(0.2f)] public float thinkBudgetMs = 2f;
+    [Min(0.2f)] public float thinkBudgetMs = 3f;
     [Tooltip("Real seconds between two snapshots of all regiments (feeds the Burst queries).")]
-    [Min(0.1f)] public float snapshotInterval = 0.4f;
+    [Min(0.1f)] public float snapshotInterval = 0.3f;
     [Min(1)] public int counterAttackAfterDays = 14;
 
     [Header("Peace decisions")]
@@ -30,7 +30,7 @@ public class AISettings
     [Tooltip("A peace demand province should touch at least this share of its neighbours with demanded / own land, otherwise it is pruned (no ugly spikes).")]
     [Range(0f, 0.6f)] public float minDemandTouch = 0.4f;
     [Tooltip("Losing AI main belligerent surrenders when the enemy is above this progress and it is far behind (chance per day).")]
-    [Range(0f, 1f)] public float surrenderChance = 0.02f;
+    [Range(0f, 1f)] public float surrenderChance = 0.04f;
 
     [Header("Personality")]
     public Vector2 aggressionRange = new Vector2(0.1f, 0.9f);
@@ -38,39 +38,50 @@ public class AISettings
 
     [Header("Economy")]
     [Range(0f, 1f)] public float peaceReserve = 0.12f;
-    [Tooltip("Higher than before: treasury now also pays for men (1 treasury = 10 men).")]
-    [Range(0f, 1f)] public float warReserve = 0.25f;
-    [Min(1)] public int maxIncreasesPerRound = 3;
+    [Tooltip("Treasury also pays for men (1 treasury = 10 men): keep enough free for war columns.")]
+    [Range(0f, 1f)] public float warReserve = 0.15f;
+    [Min(1)] public int maxIncreasesPerRound = 8;
     [Tooltip("Provinces inspected per investment (a rolling window, so every province is visited).")]
     [Min(1)] public int sampleProvinces = 8;
-    [Min(1)] public int maxQueuePerProvince = 2;
+    [Min(1)] public int maxQueuePerProvince = 16;
     public float mustPopGrowthBelow = 0.5f;
     public float popGrowthWeight = 5f, taxWeight = 4f, economyWeight = 3f, infrastructureWeight = 2f, defendWeight = 1f;
 
     [Header("Army size")]
     [Tooltip("A new regiment is only added when every regiment is at least this full.")]
-    [Range(0.5f, 1f)] public float newRegimentFullness = 0.97f;
+    [Range(0.5f, 1f)] public float newRegimentFullness = 0.95f;
 
     [Header("Military")]
     [Range(1, 10)] public int peacePrepLevel = 1;
     [Range(1, 10)] public int alertMaxPrepLevel = 7;
     [Range(0f, 1f)] public float alertThreshold = 0.25f;
-    public float attackRatio = 1.25f;
-    public float defendRatio = 1.15f;
+    public float attackRatio = 1.3f;
+    public float defendRatio = 1.2f;
     [Range(0f, 1f)] public float minAttackStrength = 0.6f;
     [Range(0f, 1f)] public float minDefendStrength = 0.25f;
     [Range(0f, 1f)] public float attackerDefendShare = 0.35f;
     public float provinceDefendWeight = 2000f;
     [Tooltip("Radius (tiles) of the Burst power query around a target: defenders that can intervene.")]
-    [Min(2f)] public float queryRadiusTiles = 14f;
+    [Min(2f)] public float queryRadiusTiles = 35f;
     public bool manageShares = true;
-    [Min(2f)] public float shareInterval = 8f;
+    [Min(2f)] public float shareInterval = 4f;
+
+    [Header("War brain")]
+    [Tooltip("Engage a threat only with this share of the force it needs, otherwise mass behind the front.")]
+    [Range(0.2f, 1f)] public float commitRatio = 0.75f;
+    [Tooltip("An attack force wider than this (tiles) first gathers (Spearhead staging) instead of trickling in.")]
+    [Min(2f)] public float gatherTiles = 6f;
+    [Range(0.5f, 1f)] public float warRefillBelow = 0.92f;
+    [Range(0.1f, 0.6f)] public float warColumnPercent = 0.3f;
+    [Min(1)] public int warColumnsPerRegiment = 4;
+    [Min(1)] public int warColumnsPerThink = 8;
+    [Range(0f, 1f)] public float elasticBelow = 0.3f;
 
     [Header("Reinforcement")]
     [Tooltip("Defender: share of the spare men used for liberation columns (the rest reinforces the front).")]
-    [Range(0f, 1f)] public float liberationShare = 0.5f;
-    [Min(1)] public int maxLiberators = 3;
-    [Min(1f)] public float reinforceCheck = 4f;
+    [Range(0f, 1f)] public float liberationShare = 0.4f;
+    [Min(1)] public int maxLiberators = 8;
+    [Min(1f)] public float reinforceCheck = 2f;
     [Tooltip("Attacker: columns sent to every striking regiment before a strike (Reserve Surge).")]
     [Min(0)] public int surgeColumns = 3;
 
@@ -78,39 +89,42 @@ public class AISettings
     public bool useTactics = true;
     public bool showTacticVisuals = true;
     [Tooltip("Min game-seconds between two tactic decisions of one nation.")]
-    [Min(1f)] public float tacticInterval = 8f;
+    [Min(1f)] public float tacticInterval = 4f;
     [Tooltip("Same tactic can not be repeated by a nation within this many game-seconds.")]
-    [Min(1f)] public float tacticCooldown = 45f;
+    [Min(1f)] public float tacticCooldown = 20f;
     [Tooltip("Visual budget: tactic drawings per real second (all nations together).")]
     [Min(0.5f)] public float visualsPerSecond = 3f;
-    [Min(2)] public int siegeMinRegiments = 3;
-    [Min(2)] public int siegeMaxSlots = 6;
+    [Min(2)] public int siegeMinRegiments = 2;
+    [Min(2)] public int siegeMaxSlots = 12;
     [Min(10f)] public float opTimeout = 60f;
-    [Range(0.3f, 1f)] public float massReadyFraction = 0.75f;
+    [Range(0.3f, 1f)] public float massReadyFraction = 0.6f;
 
     [Header("Diplomacy / war")]
     public float warMinPowerRatio = 1.6f;
     public float fearRatio = 1.2f;
     [Range(0f, 1f)] public float warChancePerCheck = 0.3f;
     [Min(1)] public int maxWars = 1;
-    public int minDaysBetweenWars = 360;
+    public int minDaysBetweenWars = 720;
     public float improveUntil = 45f;
     public int stalemateDays = 1080;
-    public bool allowVassalize = false;
+    public bool allowVassalize = true;
 
     [Header("Province merging")]
     public bool mergeProvinces = true;
     [Tooltip("Every AI picks a random goal in this range and merges its provinces down to it (never below).")]
     public Vector2Int mergeGoalRange = new Vector2Int(45, 60);
-    [Min(1)] public int mergeIntervalDays = 12;
+    [Min(1)] public int mergeIntervalDays = 30;
     [Range(0.05f, 1f)] public float mergeSmallFactor = 0.6f;
-    [Range(2, 8)] public int mergeGroupSize = 3;
-    [Range(0f, 1f)] public float mergeNewNameChance = 0.4f;
+    [Range(2, 8)] public int mergeGroupSize = 6;
+    [Range(0f, 1f)] public float mergeNewNameChance = 0.3f;
     public bool mergeOnlyInPeace = true;
     [Min(1)] public int mergePerTick = 1;
-}
 
-public enum AITactic : byte { None, Blitz, Spearhead, Pincer, Feint, Encircle, Surge, HoldLine, Elastic, CounterPunch, Liberate }
+    public const int TacticCount = 12;
+}
+public enum AITactic : byte { None, Blitz, Spearhead, Pincer, Feint, Encircle, Surge, HoldLine, Elastic, CounterPunch, Liberate, Cutoff }
+
+
 
 [Serializable]
 public class AIDiagnostics { public int nations, units, queries, operations, mergeQueue; public float thinkMs; }
@@ -373,6 +387,8 @@ public class AIManager : TickBehaviour
     private readonly List<Province> _cand = new List<Province>();
     private readonly List<int> _demand = new List<int>();
     private readonly List<Province> _mergeBuf = new List<Province>();
+    private readonly Dictionary<int, int> _libScore = new Dictionary<int, int>();
+    private readonly List<Regiment> _refill = new List<Regiment>();
     private int[] _touch;
     private bool[] _isCand, _inMine;
     private float[] _costArr;
@@ -1106,25 +1122,118 @@ public class AIManager : TickBehaviour
             UpdateOp(st);
             if (st.Op != null) for (int i = 0; i < st.Op.Units.Count; i++) _used.Add(st.Op.Units[i]);
         }
+
+        BuildThreats(st);          // 1) where will the enemy hit
+        CollectLiberation(st);     // 2) which of our provinces are occupied and clear
+
+        CombatManager cm = CombatManager.Instance;
         for (int i = 0; i < m.Regiments.Count; i++)
         {
             Regiment r = m.Regiments[i];
-            if (Movable(r) && r.Manpower >= 1.0) _free.Add(r);
+            if (!Movable(r) || r.Manpower < 1.0) continue;
+            _free.Add(r);
+            if (Committed(r, cm)) _used.Add(r);          // fighting / sieging: never pulled away
         }
 
         bool passive = defender && !IdleAsDefender(n);
-        BuildThreats(st);
+        int pending = 0;
         if (_free.Count > 0)
         {
-            AssignDefence(st, m, passive);
-            AssignLiberation(st, m);
-            Offense(st, m, passive);
-            if (passive) Rally(st, m);
+            AssignDefence(st, m, passive);                       // defend territory first
+            pending = SendLiberators(st, m, defender);           // then liberate
+            if (pending == 0 || !defender) Offense(st, m, passive);   // counter attack only after that
+            if (passive || (defender && pending > 0)) Rally(st, m);
         }
-        else AssignLiberation(st, m);              // still fills _libClear for the reinforcement columns
-
-        if (defender) DefenderReinforce(st, m);
+        LiberationColumns(st, m);
+        WarReinforce(st, m);
         SurrenderCheck(st);
+    }
+
+    private bool Committed(Regiment r, CombatManager cm)
+    {
+        if (r.InContact) return true;
+        Province p = r.CurrentProvince;
+        if (p == null || r.State == RegimentState.Moving) return false;
+        return cm.GetSiegeProgress(p) > 0f && !_threatMap.ContainsKey(p.Id);
+    }
+
+    private bool Covered(Military m, Province p)
+    {
+        for (int i = 0; i < m.Regiments.Count; i++)
+        {
+            Regiment r = m.Regiments[i];
+            if (r.State != RegimentState.Retreating && InOrHeading(r, p)) return true;
+        }
+        for (int i = 0; i < m.Columns.Count; i++)
+        {
+            Regiment c = m.Columns[i];
+            if (c.Role == ColumnRole.Occupy && c.HasPath && c.Destination == p) return true;
+        }
+        return false;
+    }
+
+    private static float Spread(List<Regiment> l, Vector3 c)
+    {
+        float mx = 0f;
+        for (int i = 0; i < l.Count; i++) mx = Mathf.Max(mx, (l[i].WorldPosition - c).sqrMagnitude);
+        return Mathf.Sqrt(mx);
+    }
+
+    private void WarReinforce(AIState st, Military m)
+    {
+        CombatManager cm = CombatManager.Instance;
+        int budget = settings.warColumnsPerThink;
+
+        _refill.Clear();
+        for (int i = 0; i < m.Regiments.Count; i++)
+        {
+            Regiment r = m.Regiments[i];
+            if (r.State != RegimentState.Retreating && r.StrengthPercent < settings.warRefillBelow) _refill.Add(r);
+        }
+        _refill.Sort((a, b) => RefillPriority(b).CompareTo(RefillPriority(a)));
+        for (int i = 0; i < _refill.Count && budget > 0; i++)
+            if (cm.ForceReinforce(_refill[i], settings.warColumnsPerRegiment, settings.warColumnPercent, true)) budget--;
+
+        RouteColumns(m);
+    }
+
+    private static float RefillPriority(Regiment r) =>
+        (r.InRange || r.InContact ? 2f : r.HasPath ? 1f : 0.5f) + (1f - r.StrengthPercent);
+
+    /// <summary>Every merge column chases the CURRENT position of its regiment and merges the moment it is close.</summary>
+    private void RouteColumns(Military m)
+    {
+        CombatManager cm = CombatManager.Instance;
+        for (int i = m.Columns.Count - 1; i >= 0; i--)
+        {
+            Regiment c = m.Columns[i];
+            if (c.Role != ColumnRole.Merge || c.Military == null) continue;
+            if (cm.TryMergeColumn(c)) continue;
+
+            Regiment t = c.MergeTarget;
+            if (t == null || t.Military != m || t.Allocation - t.Manpower < 1.0)
+            {
+                t = BestMergeTarget(m, c);
+                c.MergeTarget = t;
+            }
+            if (t == null) continue;
+            Province dest = t.HasPath ? t.Destination : (t.LocationProvince ?? t.Province);
+            if (dest != null && !InOrHeading(c, dest)) Army.MoveRegiment(c, dest);
+        }
+    }
+
+    private Regiment BestMergeTarget(Military m, Regiment c)
+    {
+        Regiment best = null;
+        float bs = float.MaxValue;
+        for (int i = 0; i < m.Regiments.Count; i++)
+        {
+            Regiment r = m.Regiments[i];
+            if (r.State == RegimentState.Retreating || r.Allocation - r.Manpower < 300.0) continue;
+            float s = (r.WorldPosition - c.WorldPosition).magnitude * (r.InRange || r.InContact ? 0.5f : 1f);
+            if (s < bs) { bs = s; best = r; }
+        }
+        return best;
     }
 
     private bool IdleAsDefender(Nation n)
@@ -1186,13 +1295,17 @@ public class AIManager : TickBehaviour
     {
         Nation n = st.Nation;
         if (_threats.Count == 0) return;
+
+        double pool = 0.0;
+        for (int i = 0; i < _free.Count; i++)
+            if (!_used.Contains(_free[i]) && _free[i].StrengthPercent >= settings.minDefendStrength) pool += _free[i].Manpower;
+        if (pool <= 0.0) return;
+
         Threat top = _threats[0];
-        double mine = 0.0;
-        for (int i = 0; i < _free.Count; i++) mine += _free[i].Manpower;
-        float ratio = (float)(mine / (top.Men * settings.defendRatio + 1.0));
+        float ratio = (float)(pool / (top.Men * settings.defendRatio + 1.0));
         bool tactics = settings.useTactics && _clock >= st.NextTactic;
 
-        if (tactics && ratio < 0.55f && !top.P.IsCapital && IsReady(st, AITactic.Elastic) && ElasticFallback(st, top)) return;
+        if (tactics && ratio < settings.elasticBelow && !top.P.IsCapital && IsReady(st, AITactic.Elastic) && ElasticFallback(st, top)) return;
         if (tactics && st.Op == null && ratio >= 1.25f && _free.Count >= 2 && IsReady(st, AITactic.CounterPunch) && EnemyMen(n, top.P) > 0.0)
         {
             _atk.Clear();
@@ -1202,14 +1315,14 @@ public class AIManager : TickBehaviour
         }
 
         int maxUse = passive ? _free.Count : Mathf.Max(1, Mathf.CeilToInt(_free.Count * settings.attackerDefendShare));
-        int usedCount = 0;
-        int drawn = 0;
+        int usedCount = 0, drawn = 0;
         _front.Clear();
         for (int t = 0; t < _threats.Count; t++)
         {
             Province p = _threats[t].P;
             bool cap = p.IsCapital;
-            if (_clock < st.ElasticUntil && !cap) continue;                  // elastic defence: do not re-engage yet
+            if (_clock < st.ElasticUntil && !cap) continue;
+
             double have = 0.0;
             for (int i = 0; i < m.Regiments.Count; i++)
             {
@@ -1218,13 +1331,22 @@ public class AIManager : TickBehaviour
                 if (r.CurrentProvince == p || (r.HasPath && r.Destination == p)) have += r.Manpower;
             }
             double need = _threats[t].Men * settings.defendRatio - have;
+            if (need <= 0.0) continue;
+
+            // not enough force to win here: do not trickle in, gather behind the front
+            if (!cap && pool < need * settings.commitRatio)
+            {
+                if (t == 0) MassBehind(st, p, maxUse, ref usedCount);
+                continue;
+            }
+
             Vector3 pos = PosOf(p);
             bool any = false;
             while (need > 0.0 && (usedCount < maxUse || cap))
             {
                 Regiment r = Nearest(_free, pos, p, settings.minDefendStrength);
                 if (r == null) break;
-                if (Order(r, p)) { need -= r.Manpower; usedCount++; any = true; }
+                if (Order(r, p)) { need -= r.Manpower; pool -= r.Manpower; usedCount++; any = true; }
             }
             if (any && drawn++ < 2) _front.Add(p);
         }
@@ -1232,6 +1354,18 @@ public class AIManager : TickBehaviour
         {
             DrawHold(st, _front);
             Used(st, AITactic.HoldLine);
+        }
+    }
+
+    private void MassBehind(AIState st, Province threat, int maxUse, ref int usedCount)
+    {
+        Province rally = CombatManager.Instance.FindSafeProvince(st.Nation, PosOf(threat), threat);
+        if (rally == null) return;
+        for (int i = 0; i < _free.Count && usedCount < maxUse; i++)
+        {
+            Regiment r = _free[i];
+            if (_used.Contains(r) || r.StrengthPercent < settings.minDefendStrength) continue;
+            if (Order(r, rally)) usedCount++;
         }
     }
 
@@ -1258,10 +1392,11 @@ public class AIManager : TickBehaviour
         return true;
     }
 
-    private void AssignLiberation(AIState st, Military m)
+    private void CollectLiberation(AIState st)
     {
         Nation n = st.Nation;
-        _libClear.Clear();
+        CombatManager cm = CombatManager.Instance;
+        _libClear.Clear(); _libScore.Clear();
         IReadOnlyList<War> wars = WM.GetWars(n);
         for (int i = 0; i < wars.Count; i++)
         {
@@ -1273,28 +1408,50 @@ public class AIManager : TickBehaviour
                 Province p = map.GetProvince(kv.Key);
                 if (p == null || p.Owner == null || w.SideOf(p.Owner.Id) != mine) continue;
                 _defendSet.Add(p.Id);
-                if (EnemyMen(n, p) > 0.0 || CombatManager.Instance.IsContested(p)) continue;     // defence handles it
-                if (p.IsCapital) _libClear.Insert(0, p); else _libClear.Add(p);
+                if (_libScore.ContainsKey(p.Id)) continue;
+                if (EnemyMen(n, p) > 0.0 || cm.IsContested(p)) continue;      // defence handles it
+
+                int score = p.IsCapital ? 100 : 0;
+                int[] nb = p.Neighbors;
+                for (int k = 0; k < nb.Length; k++)
+                {
+                    if (!w.Occupied.TryGetValue(nb[k], out int o) || w.SideOf(o) == mine) continue;
+                    Province q = map.GetProvince(nb[k]);
+                    if (q != null && q.Owner != null && w.SideOf(q.Owner.Id) == mine) score += 10;   // spread value
+                }
+                _libScore[p.Id] = score;
+                _libClear.Add(p);
             }
         }
+        _libClear.Sort((a, b) => _libScore[b.Id].CompareTo(_libScore[a.Id]));
+    }
 
-        int limit = Mathf.Max(1, _free.Count / 2), sent = 0;
+    /// <summary>Returns how many clear provinces still have nobody going there.</summary>
+    private int SendLiberators(AIState st, Military m, bool defender)
+    {
+        if (_libClear.Count == 0) return 0;
+        int limit = defender ? int.MaxValue : Mathf.Max(1, _free.Count / 2);
+        int sent = 0, pending = 0;
         Province first = null;
-        for (int i = 0; i < _libClear.Count && limit > 0 && _free.Count > 0; i++)
+        for (int i = 0; i < _libClear.Count; i++)
         {
             Province p = _libClear[i];
-            Regiment r = Nearest(_free, PosOf(p), p, settings.minDefendStrength);
-            if (r == null) break;
-            if (Order(r, p)) { limit--; sent++; if (first == null) first = p; }
+            if (Covered(m, p)) continue;
+            Regiment r = limit > 0 ? Nearest(_free, PosOf(p), p, settings.minDefendStrength) : null;
+            if (r != null && Order(r, p)) { limit--; sent++; if (first == null) first = p; }
+            else pending++;
         }
         if (sent > 0 && settings.useTactics && _clock >= st.NextTactic && IsReady(st, AITactic.Liberate) && Draw(st))
         {
             Vector3 to = PosOf(first);
             TacticVisuals.Arrow(CentroidOf(_free), to, new Color(0.3f, 1f, 0.4f), 8f);
-            TacticVisuals.Announce(to, n.Name + ": " + TacticNames[(int)AITactic.Liberate], new Color(0.3f, 1f, 0.4f), 4f);
+            TacticVisuals.Announce(to, st.Nation.Name + ": " + TacticNames[(int)AITactic.Liberate], new Color(0.3f, 1f, 0.4f), 4f);
             Used(st, AITactic.Liberate);
         }
+        return pending;
     }
+
+    private void LiberationColumns(AIState st, Military m) => DefenderReinforce(st, m);
 
     /// <summary>
     /// Defender reinforcement: half of the spare men (paid by the treasury) become Occupy columns that liberate
@@ -1318,7 +1475,7 @@ public class AIManager : TickBehaviour
         for (int i = 0; i < _libClear.Count && active + spawned < settings.maxLiberators; i++)
         {
             Province p = _libClear[i];
-            if (IsTargeted(m, p)) continue;
+            if (Covered(m, p)) continue;
             double men = Math.Min(Army.ColumnCapMen, Math.Min(budget, 3000.0));
             if (men < 500.0) break;
             Province from = cm.FindSafeProvince(n, PosOf(p), null);
@@ -1414,6 +1571,8 @@ public class AIManager : TickBehaviour
         Target best = _targets[0];
         bool strong = best.Ratio >= ratioNeed;
         if (counter && !strong) return;                       // defenders never gamble
+        if (strong && !counter && _atk.Count >= 2 && Spread(_atk, centroid) > settings.gatherTiles * Army.TileSize
+    && StartOp(st, AITactic.Spearhead, best.P, null, _atk)) return;
 
         if (!settings.useTactics || _clock < st.NextTactic)
         {
@@ -1428,6 +1587,7 @@ public class AIManager : TickBehaviour
         _tw[(int)AITactic.Pincer] = _atk.Count >= 2 ? 1.6f * (0.7f + st.Aggression) : 0f;
         _tw[(int)AITactic.Feint] = _atk.Count >= 3 && _targets.Count >= 2 && !counter ? 1.0f : 0f;
         _tw[(int)AITactic.Encircle] = _atk.Count >= settings.siegeMinRegiments && !counter ? (best.P.IsCapital || !strong ? 1.4f : 0.5f) : 0f;
+        _tw[(int)AITactic.Cutoff] = _atk.Count >= 3 && !counter ? (strong ? 0.5f : 1.8f) : 0f;
 
         float sum = 0f;
         for (int i = 1; i < _tw.Length; i++)
@@ -1527,12 +1687,15 @@ public class AIManager : TickBehaviour
         int arrows = 0;
         Color col = st.Nation.Color;
         bool draw = settings.useTactics && Draw(st);
+        double remaining = 0.0;
+        for (int i = 0; i < _atk.Count; i++) remaining += _atk[i].Manpower * _atk[i].Military.AttackPerMan.Value;
+
         for (int t = 0; t < _targets.Count && _atk.Count > 0; t++)
         {
             Target tg = _targets[t];
-            if (tg.Ratio < ratioNeed && t > 0) continue;
             double need = tg.Def * ratioNeed, got = 0.0;
-            while (_atk.Count > 0)
+            if (t > 0 && (tg.Ratio < ratioNeed || remaining < need)) continue;      // never split below what it needs
+            while (_atk.Count > 0 && got < need)
             {
                 Regiment r = Nearest(_atk, tg.Pos, null, 0f);
                 if (r == null) { _atk.Clear(); break; }
@@ -1540,13 +1703,13 @@ public class AIManager : TickBehaviour
                 Vector3 from = r.WorldPosition;
                 if (!Order(r, tg.P)) continue;
                 if (draw && arrows++ < 3) TacticVisuals.Arrow(from, tg.Pos, col, 6f);
-                got += r.Manpower * r.Military.AttackPerMan.Value;
-                if (got >= need) break;
+                double p = r.Manpower * r.Military.AttackPerMan.Value;
+                got += p; remaining -= p;
             }
         }
         for (int i = 0; i < _atk.Count; i++) Order(_atk[i], best.P);
         _atk.Clear();
-        if (draw) { TacticVisuals.Announce(best.Pos, st.Nation.Name + ": " + TacticNames[(int)AITactic.Blitz], col, 4f); }
+        if (draw) TacticVisuals.Announce(best.Pos, st.Nation.Name + ": " + TacticNames[(int)AITactic.Blitz], col, 4f);
         Used(st, AITactic.Blitz);
     }
 
@@ -1633,6 +1796,28 @@ public class AIManager : TickBehaviour
                         }
                         op.Stage[i] = bestSlot;
                     }
+                    break;
+                }
+            case AITactic.Cutoff:
+                {
+                    Province stage = NearestControlled(n, sp);
+                    if (stage == null) return false;
+                    Province rear = PickRear(n, strike, PosOf(stage));
+                    if (rear == null) return false;
+                    int blockers = Mathf.Max(1, units.Count / 3);
+                    for (int b = 0; b < blockers; b++)
+                    {
+                        int pick = -1; float bd = float.MaxValue;
+                        for (int i = 0; i < op.Units.Count; i++)
+                        {
+                            if (op.Grp[i] == 1) continue;
+                            float d = (op.Units[i].WorldPosition - PosOf(rear)).sqrMagnitude;
+                            if (d < bd) { bd = d; pick = i; }
+                        }
+                        if (pick >= 0) op.Grp[pick] = 1;
+                    }
+                    for (int i = 0; i < op.Units.Count; i++) op.Stage[i] = op.Grp[i] == 1 ? rear : stage;
+                    st.Staging = stage;
                     break;
                 }
             default: return false;
@@ -1743,10 +1928,11 @@ public class AIManager : TickBehaviour
         for (int i = 0; i < op.Units.Count; i++)
         {
             Regiment r = op.Units[i];
-            Province target = op.Kind == AITactic.Feint && op.Grp[i] == 0 && op.Alt != null ? op.Alt : op.Strike;
-            if (r.State != RegimentState.Moving || op.Kind != AITactic.Encircle) Order(r, target);
             Province s = op.Stage[i];
             if (s != null && seen.Add(s)) { if (a == null) a = s; else if (b == null) b = s; }
+            if (op.Kind == AITactic.Cutoff && op.Grp[i] == 1) continue;           // blockers hold the rear
+            Province target = op.Kind == AITactic.Feint && op.Grp[i] == 0 && op.Alt != null ? op.Alt : op.Strike;
+            if (r.State != RegimentState.Moving || op.Kind != AITactic.Encircle) Order(r, target);
         }
 
         if (Draw(st))
@@ -2024,6 +2210,22 @@ public class AIManager : TickBehaviour
         float spend = settings.demandSpend * (st.Aggression > 0.6f ? 1f : Mathf.Lerp(1f, 0.55f, st.Friendliness * 0.8f));
         if (TryDemand(st, w, side, spend)) return;
         WM.Decide(w, side, WarOutcome.TakeOccupied);
+    }
+
+    /// <summary>A hostile neighbour of the target that lies farther from us than the target itself.</summary>
+    private Province PickRear(Nation n, Province strike, Vector3 from)
+    {
+        Province best = null;
+        float bd = (PosOf(strike) - from).sqrMagnitude;
+        int[] nb = strike.Neighbors;
+        for (int i = 0; i < nb.Length; i++)
+        {
+            Province q = map.GetProvince(nb[i]);
+            if (q == null || q.Owner == null || !Hostile(n, q.Owner) || EnemyMen(n, q) > 0.0 || !Army.CanEnter(n, q)) continue;
+            float d = (PosOf(q) - from).sqrMagnitude;
+            if (d > bd) { bd = d; best = q; }
+        }
+        return best;
     }
 
     private void EnsureDemandArrays(int pc)

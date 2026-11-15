@@ -819,7 +819,7 @@ public class WarManager : TickBehaviour
         }
     }
 
-    /// <summary>Removes the occupation of a province and takes back its war score.</summary>
+    /// <summary>Removes the occupation of a province and takes back its war score. Spreads to neighbours like Occupy.</summary>
     public bool Liberate(War war, Province province)
     {
         LastError = null;
@@ -828,8 +828,46 @@ public class WarManager : TickBehaviour
 
         war.LastActivityDay = DateManager.Instance.TotalDays;
         OnProvinceOccupationChanged?.Invoke(war, province, null);
+
+        SpreadLiberation(war, province);
         RecalculateProgress(war);                                // a liberated capital takes its progress back
         return true;
+    }
+
+    /// <summary>Mirror of SpreadOccupation: neighbouring provinces of the same side that are occupied by the enemy are freed too.</summary>
+    private void SpreadLiberation(War war, Province origin)
+    {
+        if (_map == null || origin.Neighbors == null || origin.Owner == null) return;
+
+        Nation liberator = origin.Owner;                          // owner of the freed province = the liberating side
+        WarSide mine = war.SideOf(liberator.Id);
+        if (mine == WarSide.None) return;
+
+        _spreadBuf.Clear();
+        int[] nb = origin.Neighbors;
+        for (int i = 0; i < nb.Length; i++)
+        {
+            Province q = _map.GetProvince(nb[i]);
+            if (q == null || q.Owner == null) continue;
+            if (war.SideOf(q.Owner.Id) != mine) continue;                         // only land of the liberating side
+            if (!war.Occupied.TryGetValue(q.Id, out int occ)) continue;           // must be occupied
+            if (war.SideOf(occ) == mine) continue;                                // ... by the enemy
+            if (CombatManager.HasInstance && !CombatManager.Instance.CanTakeProvince(war, liberator, q)) continue;   // enemy fighters there
+            _spreadBuf.Add(q);
+        }
+
+        int take = settings.spreadProvinces == 0 ? _spreadBuf.Count : settings.spreadProvinces;
+        for (int n = 0; n < take && _spreadBuf.Count > 0 && !war.Ended; n++)
+        {
+            int idx = RNG.GetInt(0, _spreadBuf.Count);
+            Province pick = _spreadBuf[idx];
+            _spreadBuf[idx] = _spreadBuf[_spreadBuf.Count - 1];                   // swap-remove
+            _spreadBuf.RemoveAt(_spreadBuf.Count - 1);
+
+            war.Occupied.Remove(pick.Id);
+            OnProvinceOccupationChanged?.Invoke(war, pick, null);
+            OnProvinceOccupationSpread?.Invoke(war, pick, null);
+        }
     }
 
     /// <summary>True when EVERY province of n is occupied by an enemy in some war n fights.</summary>

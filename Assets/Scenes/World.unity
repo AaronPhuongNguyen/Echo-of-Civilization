@@ -915,21 +915,21 @@ MonoBehaviour:
     demandSpend: 1
     maxDemandProvinces: 50
     minDemandTouch: 0.4
-    surrenderChance: 0.02
+    surrenderChance: 0.05
     aggressionRange: {x: 0.1, y: 0.9}
     friendlinessRange: {x: 0.2, y: 0.9}
     peaceReserve: 0.12
     warReserve: 0.25
-    maxIncreasesPerRound: 3
+    maxIncreasesPerRound: 8
     sampleProvinces: 8
-    maxQueuePerProvince: 2
+    maxQueuePerProvince: 16
     mustPopGrowthBelow: 0.5
     popGrowthWeight: 5
     taxWeight: 4
     economyWeight: 3
     infrastructureWeight: 2
     defendWeight: 1
-    newRegimentFullness: 0.97
+    newRegimentFullness: 0.6
     peacePrepLevel: 1
     alertMaxPrepLevel: 7
     alertThreshold: 0.25
@@ -1306,15 +1306,15 @@ MonoBehaviour:
   settings:
     combatInterval: 0.1
     autoMinRadius: 1
-    damageScale: 0.01
+    damageScale: 0.03
     useDice: 1
     diceBonus:
       Base: 0.5
       Flat: 0
       Percent: 0
       Total: 1
-    diceRollDays: 7
-    diceBuffDays: 6
+    diceRollDays: 5
+    diceBuffDays: 4
     pushStartShare: 0.5
     pushFullShare: 0.75
     pushSpeedFactor: 0.3
@@ -1322,9 +1322,9 @@ MonoBehaviour:
     occupyDays: 3
     defendDivisor: 1
     occupyOnPath: 1
-    pathOccupyDefendLimit: 2
+    pathOccupyDefendLimit: 0
     reinforcements: 1
-    reinforceInterval: 3
+    reinforceInterval: 1
     reinforceBelowPercent: 99
     columnPercent: 15
     minColumnManpower: 50
@@ -1370,11 +1370,11 @@ MonoBehaviour:
   width: 300
   height: 44
   offsetY: 0
-  minScale: 0.7
-  maxScale: 1.2
-  endGrace: 0.75
-  maxViews: 64
-  rebuildInterval: 0.05
+  minScale: 0.75
+  maxScale: 1.25
+  endGrace: 0.8
+  maxViews: 256
+  rebuildInterval: 0.1
 --- !u!1 &1905439402
 GameObject:
   m_ObjectHideFlags: 0
@@ -1683,24 +1683,24 @@ MonoBehaviour:
   defaultPreparationLevel: 2
   prepStepInterval: 0.1
   prepStepPercent: 0.2
-  manpowerPerRegiment: 10000
+  manpowerPerRegiment: 1000
   minRegiments: 1
-  maxRegiments: 50
-  retreatManpowerPercent: 10
+  maxRegiments: 30
+  retreatManpowerPercent: 15
   MinManpowerToRetreat: 10000
-  reinforcePerDay: 0.03
-  retreatSpeedTiles: 8
+  reinforcePerDay: 0.04
+  retreatSpeedTiles: 10
   menPerTreasury: 10
   chargeTreasury: 1
   moveSpeedTiles: 4
-  reinforceSpeedTiles: 6
+  reinforceSpeedTiles: 8
   allowSeaMovement: 1
   seaSpeedFactor: 0.5
   seaRangeTiles: 100
   maxSeaNodes: 2500
   referenceVisibleTiles: 120
-  minCardScale: 0.5
-  maxCardScale: 1.25
+  minCardScale: 0.4
+  maxCardScale: 1.15
   columnScale: 0.8
   hideTextBelowScale: 0.6
   pileOffset: 0.22
