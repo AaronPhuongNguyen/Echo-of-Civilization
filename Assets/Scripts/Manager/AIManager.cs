@@ -111,14 +111,27 @@ public class AISettings
 
     [Header("Province merging")]
     public bool mergeProvinces = true;
-    [Tooltip("Every AI picks a random goal in this range and merges its provinces down to it (never below).")]
-    public Vector2Int mergeGoalRange = new Vector2Int(45, 60);
+    [Tooltip("Province goal = nation area (tiles, 1 tile = 1 m) / this, clamped to Min..Max. Small kingdom = few provinces.")]
+    [Min(1f)] public float tilesPerProvince = 400f;
+    [Tooltip("Every AI gets its own factor in 1 +- this, so nations of equal size still differ a bit.")]
+    [Range(0f, 0.5f)] public float goalJitter = 0.2f;
+    [Range(1, 70)] public int minProvinceGoal = 1;
+    [Range(1, 70)] public int maxProvinceGoal = 70;
     [Min(1)] public int mergeIntervalDays = 30;
     [Range(0.05f, 1f)] public float mergeSmallFactor = 0.6f;
     [Range(2, 8)] public int mergeGroupSize = 6;
     [Range(0f, 1f)] public float mergeNewNameChance = 0.3f;
     public bool mergeOnlyInPeace = true;
     [Min(1)] public int mergePerTick = 1;
+    [Tooltip("Merge groups are grown round (centre-near, hole filling) instead of 'smallest neighbour first'.")]
+    public bool compactMerge = true;
+
+    [Header("Province beautify (2nd layer)")]
+    public bool beautify = true;
+    [Tooltip("Reshape jobs per tick (each one is a local re-slice of a few provinces).")]
+    [Min(1)] public int beautifyPerTick = 1;
+    [Tooltip("When a nation is at its goal, ugly provinces from generation / conquest are fixed too.")]
+    public bool beautifyExisting = true;
 
     public const int TacticCount = 12;
 }
@@ -145,6 +158,7 @@ internal struct PowerQueryJob : IJobParallelFor
     [ReadOnly] public NativeArray<int> qnation;
     [ReadOnly] public NativeArray<float> qr2;
     [WriteOnly] public NativeArray<float4> result;           // x enemy men, y enemy DEF power, z enemy ATK power, w friendly men
+
     public int units, nationCap;
 
     public void Execute(int i)
@@ -342,8 +356,10 @@ public class AIManager : TickBehaviour
         public Province Staging;
         public bool SharesCustom, MergeQueued;
         public int InvestCursor, MergeGoal;
+        public float MergeScale;
         public AITactic LastTactic;
         public readonly float[] Ready = new float[AISettings.TacticCount];
+
         public Op Op;
     }
 
@@ -353,6 +369,8 @@ public class AIManager : TickBehaviour
     private readonly Dictionary<int, AIState> _states = new Dictionary<int, AIState>();
     private readonly List<AIState> _list = new List<AIState>();
     private readonly Queue<AIState> _mergeQ = new Queue<AIState>();
+    private readonly Queue<int> _beautyQ = new Queue<int>();
+    private readonly HashSet<int> _beautySet = new HashSet<int>();
     private readonly AIQueryBatch _q = new AIQueryBatch();
     private readonly System.Diagnostics.Stopwatch _sw = new System.Diagnostics.Stopwatch();
     private int _cursor, _unitCount, _lastQueries;
@@ -426,6 +444,7 @@ public class AIManager : TickBehaviour
         World.OnNationRemoved += HandleRemoved;
         DateManager.Instance.OnDayPassed += HandleDay;
         if (PlayerManager.HasInstance) PlayerManager.Instance.OnPlayerChanged += HandlePlayerChanged;
+        map.OnProvincesReshaped += HandleReshaped;     // OnEnable
 
         if (map != null)
         {
@@ -447,6 +466,8 @@ public class AIManager : TickBehaviour
         }
         if (DateManager.HasInstance) DateManager.Instance.OnDayPassed -= HandleDay;
         if (PlayerManager.HasInstance) PlayerManager.Instance.OnPlayerChanged -= HandlePlayerChanged;
+
+        _subscribedMap.OnProvincesReshaped -= HandleReshaped;   // OnDisable
         if (_subscribedMap != null)
         {
             _subscribedMap.OnMapGenerated -= Rebuild;
@@ -466,6 +487,7 @@ public class AIManager : TickBehaviour
     {
         _states.Clear(); _list.Clear(); _mergeQ.Clear(); _cursor = 0;
         _regsAt = null; _touched.Clear(); _hot.Clear(); _touch = null; _isCand = null; _inMine = null; _costArr = null;
+        _beautyQ.Clear(); _beautySet.Clear();
     }
 
     private void HandleRemoved(Nation n)
@@ -518,9 +540,10 @@ public class AIManager : TickBehaviour
                 NextEconomy = today + RNG.GetInt(0, settings.economyIntervalDays + 1),
                 NextDiplomacy = today + RNG.GetInt(1, settings.diplomacyIntervalDays + 1),
                 NextMerge = today + RNG.GetInt(1, settings.mergeIntervalDays + 1),
-                MergeGoal = RNG.GetInt(settings.mergeGoalRange.x, Mathf.Max(settings.mergeGoalRange.x, settings.mergeGoalRange.y) + 1),
+                MergeScale = RNG.GetFloat(1f - settings.goalJitter, 1f + settings.goalJitter),
                 InvestCursor = RNG.GetInt(0, 1000)
             };
+            st.MergeGoal = GoalFor(st);          // right before _states.Add(n.Id, st);
             _states.Add(n.Id, st);
             _list.Add(st);
         }
@@ -550,11 +573,17 @@ public class AIManager : TickBehaviour
                 st.NextDiplomacy = today + settings.diplomacyIntervalDays + RNG.GetInt(0, 5);
                 RunDiplomacy(st, today);
             }
-            if (settings.mergeProvinces && today >= st.NextMerge)
+            if (settings.mergeProvinces && today >= st.NextMerge && map != null && map.IsReady)
             {
+                st.MergeGoal = GoalFor(st);
                 int excess = st.Nation.ProvinceCount - st.MergeGoal;
                 st.NextMerge = today + (excess > 8 ? 2 : settings.mergeIntervalDays + RNG.GetInt(0, 5));
                 if (excess > 0 && !st.MergeQueued) { st.MergeQueued = true; _mergeQ.Enqueue(st); }
+                else if (excess <= 0 && settings.beautify && settings.beautifyExisting)
+                {
+                    Province ugly = map.FindUglyProvince(st.Nation);
+                    if (ugly != null) QueueBeauty(ugly);
+                }
             }
         }
     }
@@ -674,6 +703,21 @@ public class AIManager : TickBehaviour
     #endregion
 
     #region Province merging (queued, one per tick)
+    private void HandleReshaped(IReadOnlyList<Province> changed) { _regsAt = null; _nextSnap = 0f; }
+
+    /// <summary>Province goal from the nation's size: Area (tiles = metres) / tilesPerProvince, clamped to 1..70.</summary>
+    private int GoalFor(AIState st)
+    {
+        int lo = Mathf.Clamp(settings.minProvinceGoal, 1, 70);
+        int hi = Mathf.Clamp(Mathf.Max(lo, settings.maxProvinceGoal), 1, 70);
+        float per = Mathf.Max(1f, settings.tilesPerProvince * Mathf.Max(0.1f, st.MergeScale));
+        return Mathf.Clamp(Mathf.RoundToInt(st.Nation.Area / per), lo, hi);
+    }
+
+    private void QueueBeauty(Province p)
+    {
+        if (p != null && _beautySet.Add(p.Id)) _beautyQ.Enqueue(p.Id);
+    }
 
     private bool RunMerge(AIState st)
     {
@@ -681,6 +725,7 @@ public class AIManager : TickBehaviour
         if (map == null || !map.IsReady || n.IsEmpty) return false;
         if (settings.mergeOnlyInPeace && WM.IsAtWar(n)) return false;
 
+        st.MergeGoal = GoalFor(st);
         int spare = n.ProvinceCount - st.MergeGoal;
         if (spare < 1) return false;
 
@@ -691,14 +736,16 @@ public class AIManager : TickBehaviour
             Province p = n.Provinces[i];
             bool small = p.TileCount < limit;
             if (seed != null && p.TileCount >= seed.TileCount) continue;
-            if (!small && spare < 4) continue;                       // big excess: any province may go
+            if (!small && spare < 4) continue;
             if (!HasOwnNeighbour(p, n) || (CombatManager.HasInstance && CombatManager.Instance.IsContested(p))) continue;
             seed = p;
         }
         if (seed == null) return false;
 
         int size = Mathf.Min(settings.mergeGroupSize, spare + 1);
-        if (!map.FindMergeGroup(seed, size, _mergeBuf)) return false;
+        bool found = settings.compactMerge ? map.FindCompactMergeGroup(seed, size, _mergeBuf)
+                                           : map.FindMergeGroup(seed, size, _mergeBuf);
+        if (!found) return false;
 
         Province leader = _mergeBuf[0];
         for (int i = 1; i < _mergeBuf.Count; i++)
@@ -708,7 +755,10 @@ public class AIManager : TickBehaviour
             if (p.IsCapital || p.Population > leader.Population) leader = p;
         }
         string name = RNG.GetFloat(0f, 1f) < settings.mergeNewNameChance ? map.GenerateProvinceName() : null;
-        return map.MergeProvinces(leader, _mergeBuf, name) != null;
+        Province merged = map.MergeProvinces(leader, _mergeBuf, name);
+        if (merged == null) return false;
+        if (settings.beautify) QueueBeauty(merged);              // 2nd layer: re-slice the new province and its neighbours
+        return true;
     }
 
     private bool HasOwnNeighbour(Province p, Nation n)
@@ -756,6 +806,19 @@ public class AIManager : TickBehaviour
             AIState st = _mergeQ.Dequeue();
             st.MergeQueued = false;
             if (_states.ContainsKey(st.Nation.Id) && RunMerge(st)) merges++;
+        }
+        if (settings.beautify)
+        {
+            int tries = 0;
+            while (_beautyQ.Count > 0 && tries++ < settings.beautifyPerTick)
+            {
+                int id = _beautyQ.Dequeue();
+                _beautySet.Remove(id);
+                Province p = map.GetProvince(id);
+                if (p == null || p.IsMerged || p.Owner == null) continue;
+                if (settings.mergeOnlyInPeace && WM.IsAtWar(p.Owner)) continue;
+                map.Beautify(p);
+            }
         }
 
         _thinkMs = Mathf.Lerp(_thinkMs, (float)(_sw.ElapsedTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency), 0.1f);

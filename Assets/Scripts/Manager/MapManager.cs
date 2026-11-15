@@ -142,7 +142,7 @@ public class SeaRegion
 //   - nations are stored in WorldManager (registered on the main thread after generation)
 // ─────────────────────────────────────────────────────────────────────────────
 
-public class MapManager : MonoBehaviour
+public partial class MapManager : MonoBehaviour
 {
     #region Inspector & events
 
