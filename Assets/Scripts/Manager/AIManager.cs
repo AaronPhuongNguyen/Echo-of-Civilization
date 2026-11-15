@@ -111,19 +111,19 @@ public class AISettings
 
     [Header("Province merging")]
     public bool mergeProvinces = true;
-    [Tooltip("Province goal = nation area (tiles, 1 tile = 1 m) / this, clamped to Min..Max. Small kingdom = few provinces.")]
+    [Tooltip("A nation merges ONLY while it has MORE provinces than this. It never merges below it.")]
+    [Range(1, 70)] public int maxProvinces = 60;
+    [Tooltip("OFF: cap = maxProvinces for everybody. ON: small nations get a lower cap (area / tilesPerProvince, 1 tile = 1 m), never above maxProvinces.")]
+    public bool scaleCapByArea = false;
     [Min(1f)] public float tilesPerProvince = 400f;
-    [Tooltip("Every AI gets its own factor in 1 +- this, so nations of equal size still differ a bit.")]
     [Range(0f, 0.5f)] public float goalJitter = 0.2f;
     [Range(1, 70)] public int minProvinceGoal = 1;
-    [Range(1, 70)] public int maxProvinceGoal = 70;
     [Min(1)] public int mergeIntervalDays = 30;
     [Range(0.05f, 1f)] public float mergeSmallFactor = 0.6f;
     [Range(2, 8)] public int mergeGroupSize = 6;
     [Range(0f, 1f)] public float mergeNewNameChance = 0.3f;
     public bool mergeOnlyInPeace = true;
     [Min(1)] public int mergePerTick = 1;
-    [Tooltip("Merge groups are grown round (centre-near, hole filling) instead of 'smallest neighbour first'.")]
     public bool compactMerge = true;
 
     [Header("Province beautify (2nd layer)")]
@@ -576,10 +576,13 @@ public class AIManager : TickBehaviour
             if (settings.mergeProvinces && today >= st.NextMerge && map != null && map.IsReady)
             {
                 st.MergeGoal = GoalFor(st);
-                int excess = st.Nation.ProvinceCount - st.MergeGoal;
+                int excess = st.Nation.ProvinceCount - st.MergeGoal;      // > 0 only when over the maximum
                 st.NextMerge = today + (excess > 8 ? 2 : settings.mergeIntervalDays + RNG.GetInt(0, 5));
-                if (excess > 0 && !st.MergeQueued) { st.MergeQueued = true; _mergeQ.Enqueue(st); }
-                else if (excess <= 0 && settings.beautify && settings.beautifyExisting)
+                if (excess > 0)
+                {
+                    if (!st.MergeQueued) { st.MergeQueued = true; _mergeQ.Enqueue(st); }
+                }
+                else if (settings.beautify && settings.beautifyExisting)
                 {
                     Province ugly = map.FindUglyProvince(st.Nation);
                     if (ugly != null) QueueBeauty(ugly);
@@ -706,10 +709,12 @@ public class AIManager : TickBehaviour
     private void HandleReshaped(IReadOnlyList<Province> changed) { _regsAt = null; _nextSnap = 0f; }
 
     /// <summary>Province goal from the nation's size: Area (tiles = metres) / tilesPerProvince, clamped to 1..70.</summary>
+    /// <summary>Maximum provinces this nation may have. Merging happens only above it.</summary>
     private int GoalFor(AIState st)
     {
-        int lo = Mathf.Clamp(settings.minProvinceGoal, 1, 70);
-        int hi = Mathf.Clamp(Mathf.Max(lo, settings.maxProvinceGoal), 1, 70);
+        int hi = Mathf.Clamp(settings.maxProvinces, 1, 70);
+        if (!settings.scaleCapByArea) return hi;
+        int lo = Mathf.Clamp(settings.minProvinceGoal, 1, hi);
         float per = Mathf.Max(1f, settings.tilesPerProvince * Mathf.Max(0.1f, st.MergeScale));
         return Mathf.Clamp(Mathf.RoundToInt(st.Nation.Area / per), lo, hi);
     }
@@ -726,7 +731,7 @@ public class AIManager : TickBehaviour
         if (settings.mergeOnlyInPeace && WM.IsAtWar(n)) return false;
 
         st.MergeGoal = GoalFor(st);
-        int spare = n.ProvinceCount - st.MergeGoal;
+        int spare = n.ProvinceCount - st.MergeGoal;     // provinces ABOVE the cap
         if (spare < 1) return false;
 
         float limit = (float)((double)n.Area / n.ProvinceCount) * settings.mergeSmallFactor;

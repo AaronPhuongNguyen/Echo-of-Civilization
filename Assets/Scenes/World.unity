@@ -482,7 +482,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   map: {fileID: 0}
   startNationId: -1
-  spectator: 1
+  spectator: 0
   useFogOfWar: 1
   playerNationName: 
 --- !u!1 &606491824
@@ -971,13 +971,21 @@ MonoBehaviour:
     stalemateDays: 1080
     allowVassalize: 1
     mergeProvinces: 1
-    mergeGoalRange: {x: 45, y: 60}
-    mergeIntervalDays: 30
+    maxProvinces: 45
+    scaleCapByArea: 1
+    tilesPerProvince: 400
+    goalJitter: 0.2
+    minProvinceGoal: 1
+    mergeIntervalDays: 180
     mergeSmallFactor: 0.6
     mergeGroupSize: 6
     mergeNewNameChance: 0.3
     mergeOnlyInPeace: 1
     mergePerTick: 1
+    compactMerge: 1
+    beautify: 1
+    beautifyPerTick: 1
+    beautifyExisting: 1
   map: {fileID: 0}
   showDiagnostics: 1
   diagnosticsInterval: 1
@@ -1427,12 +1435,22 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 646b647e8d2e11f49866f615fdbce47f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  shape:
+    uglyBelow: 0.55
+    lloydIterations: 4
+    keepAreaShare: 0.6
+    depth: 1
+    maxProvincesPerReshape: 12
+    maxTilesPerReshape: 80000
+    minImprovement: 0.02
+    passes: 2
+    elongationTolerance: 2
   settings:
     width: 516
     height: 516
     tileSize: 1
     pivotAtCenter: 1
-    randomSeed: 0
+    randomSeed: 1
     seed: 76375923
     landPercent: 0.4
     minContinents: 7
@@ -1449,7 +1467,7 @@ MonoBehaviour:
     minLandPatch: 300
     minWaterPatch: 600
     minProvinces: 1
-    provinceMaxDivisor: 40
+    provinceMaxDivisor: 35
     minTilesPerProvince: 10
     seaTilesPerBlock: 6000
     lakeMaxTiles: 20000
@@ -1483,15 +1501,15 @@ MonoBehaviour:
       Flat: 0
       Percent: 0
       Total: 1
-    minNations: 10
-    maxNations: 10
+    minNations: 5
+    maxNations: 300
     nationSizeVariation: 0.8
-    minIslandNationFactor: 0.3
-    waterColor: {r: 0.027450982, g: 0.49803925, b: 0.6862745, a: 1}
+    minIslandNationFactor: 0.1
+    waterColor: {r: 0, g: 0.558, b: 1, a: 1}
     neutralColor: {r: 0.6, g: 0.6, b: 0.6, a: 1}
     borderColor: {r: 0, g: 0, b: 0, a: 1}
-    provinceBorderAlpha: 0.35
-    nationBorderAlpha: 0.75
+    provinceBorderAlpha: 0.4
+    nationBorderAlpha: 0.85
     borderPixelsPerTile: 8
     provinceBorderPixels: 1
     nationBorderPixels: 2

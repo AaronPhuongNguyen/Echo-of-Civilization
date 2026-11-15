@@ -1966,10 +1966,17 @@ public partial class MapManager : MonoBehaviour
         m.sr.color = InverseColor(n.Color);
         m.sr.sortingOrder = markerSortingOrder;
 
-        float tiles = Mathf.Max(markerMinTiles, Mathf.Sqrt(cap.TileCount) * markerProvinceFraction);
+        // default scale = the prefab's own scale. Pooled objects may still carry an old scale, so always set it.
+        Vector3 defScale = capitalMarkerPrefab.transform.localScale;
         float spriteSize = m.sr.sprite ? Mathf.Max(0.0001f, m.sr.sprite.bounds.size.x) : 1f;
-        float s = tiles * _s.tileSize / spriteSize;
-        m.go.transform.localScale = new Vector3(s, s, 1f);
+        float defSize = spriteSize * Mathf.Max(0.0001f, defScale.x);            // marker size at default scale (world units)
+
+        float fit = Mathf.Sqrt(cap.TileCount) * markerProvinceFraction * _s.tileSize;   // what the province can hold
+        float floor = markerMinTiles * _s.tileSize;                                      // never smaller than this
+        float size = Mathf.Min(defSize, Mathf.Max(fit, floor));                          // big province -> defSize, tiny -> shrink
+
+        float k = size / defSize;
+        m.go.transform.localScale = new Vector3(defScale.x * k, defScale.y * k, defScale.z);
     }
 
     private void DestroyMarkers()
