@@ -1314,10 +1314,10 @@ MonoBehaviour:
     combatInterval: 0.1
     autoMinRadius: 1
     damageScale: 0.003
-    defenseRatio: 1000
+    defenseRatio: 25000
     useDice: 1
     diceBonus:
-      Base: 0.5
+      Base: 1
       Flat: 0
       Percent: 0
       Total: 1
@@ -1678,52 +1678,53 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: fb3cd17999f5ab2438372c231cba6854, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  map: {fileID: 1905439404}
+  map: {fileID: 0}
   screenCanvas: {fileID: 1613407035}
   backgroundSprite: {fileID: 21300000, guid: eb5202e4e0328a540be5f488bb53fcff, type: 3}
   fontAsset: {fileID: 11400000, guid: 03f780b01b9b2e640984a49e5a44edd1, type: 2}
-  regimentSize: 40
-  backgroundAlpha: 1
+  regimentSize: 45
+  backgroundAlpha: 0.85
   menPerValue: 1000
   maxRegimentValue: 100
   maxColumnValue: 10
   manpowerRecoveryYears: 12
-  defaultPreparationLevel: 2
-  prepStepInterval: 0.1
-  prepStepPercent: 0.2
+  defaultPreparationLevel: 1
+  prepStepInterval: 0.5
+  prepStepPercent: 1
   manpowerPerRegiment: 1000
   minRegiments: 1
   maxRegiments: 30
-  retreatManpowerPercent: 15
-  MinManpowerToRetreat: 10000
-  reinforcePerDay: 0.04
-  retreatSpeedTiles: 10
+  retreatManpowerPercent: 10
+  MinManpowerToRetreat: 5000
+  reinforcePerDay: 0.03
+  retreatSpeedTiles: 8
   menPerTreasury: 10
   chargeTreasury: 1
-  moveSpeedTiles: 4
+  moveSpeedTiles: 5
   reinforceSpeedTiles: 8
   allowSeaMovement: 1
   seaSpeedFactor: 0.5
-  seaRangeTiles: 100
-  maxSeaNodes: 2500
+  seaRangeTiles: 60
+  maxSeaNodes: 6000
+  seaHops: 8
   referenceVisibleTiles: 120
-  minCardScale: 0.4
-  maxCardScale: 1.15
-  columnScale: 0.8
+  minCardScale: 0.6
+  maxCardScale: 1.2
+  columnScale: 0.75
   hideTextBelowScale: 0.6
   pileOffset: 0.22
   pileMaxDepth: 4
   viewCamera: {fileID: 0}
-  markerMaxVisibleTiles: 600
-  visualRefreshInterval: 1
+  markerMaxVisibleTiles: 700
+  visualRefreshInterval: 0.5
   debugNation: -1
   debugRegiment: -1
   debugAmount: 20
   showMilitaryInInspector: 1
   diagnosticsInterval: 1
   militaryView: []
-  debugShowWarManpower: 1
-  debugLabelFill: 0.75
+  debugShowWarManpower: 0
+  debugLabelFill: 0.6
 --- !u!1 &2035398686
 GameObject:
   m_ObjectHideFlags: 0

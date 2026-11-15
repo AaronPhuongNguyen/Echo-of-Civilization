@@ -1638,6 +1638,31 @@ public class AIManager : TickBehaviour
             Nation mainEnemy = World.GetNation(mine == WarSide.Attacker ? w.DefenderId : w.AttackerId);
             if (mainEnemy != null && mainEnemy.Capital != null) TryAddTarget(mainEnemy.Capital, w, mine, centroid, tile);
         }
+
+        if (_targets.Count < 3)
+        {
+            for (int wi = 0; wi < wars.Count; wi++)
+            {
+                War w = wars[wi];
+                if (w.Ended) continue;
+                WarSide mine = w.SideOf(n.Id);
+                if (mine == WarSide.None) continue;
+                List<int> foes = mine == WarSide.Attacker ? w.Defenders : w.Attackers;
+                int added = 0;
+                for (int f = 0; f < foes.Count && added < 12; f++)
+                {
+                    Nation en = World.GetNation(foes[f]);
+                    if (en == null) continue;
+                    for (int i = 0; i < en.Provinces.Count && added < 12; i++)
+                    {
+                        Province q = en.Provinces[i];
+                        if (_seen.Contains(q.Id)) continue;
+                        TryAddTarget(q, w, mine, centroid, tile);
+                        added++;
+                    }
+                }
+            }
+        }
         if (_targets.Count == 0) return;
 
         // ONE Burst call scores every candidate: enemy defence that can intervene inside the query radius

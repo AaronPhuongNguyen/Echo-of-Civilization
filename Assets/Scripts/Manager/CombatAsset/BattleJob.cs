@@ -353,7 +353,7 @@ public sealed class CombatBatch : IDisposable
                         float rIn = math.min(inner[i], inner[j]);
                         if (d2 <= rIn * rIn) flags |= 2;
 
-                        float mi = 1f, mj = 1f;
+                        float mj = 1f;
                         if (useDice != 0)
                         {
                             uint uidJ = (uint)uid[j];
@@ -365,13 +365,13 @@ public sealed class CombatBatch : IDisposable
                             if (phase < buffDays)
                             {
                                 bool loBuffed = (Hash(h, (uint)epoch) & 1u) == 0u;
-                                bool iIsLo = uidI < uidJ;
-                                if (iIsLo == loBuffed) mi += diceBonus; else mj += diceBonus;
+                                bool jIsLo = uidJ < uidI;
+                                if (jIsLo == loBuffed) mj += diceBonus;
                             }
                         }
 
                         float atkJ = men[j] * atk[j] * mj;
-                        float defIt = menI * defI * mi;
+                        float defIt = menI * defI;
                         float eff = atkJ * defRatio / (defIt + defRatio);
                         hp += eff * damageScale * dmg[j] * dt;
                     }

@@ -16,11 +16,11 @@ public class CombatSettings
     [Tooltip("hp = ATK * Ratio / (DEF + Ratio) * damageScale * damageMultiplier * seconds.")]
     [Min(0.00001f)] public float damageScale = 0.003f;
     [Tooltip("Damage = ATK * Ratio / (DEF + Ratio). DEF equal to Ratio halves the damage.")]
-    [Min(1f)] public float defenseRatio = 1000f;
+    [Min(1f)] public float defenseRatio = 25000f;
 
     [Header("Dice (only buff in the game)")]
     public bool useDice = true;
-    public GameValue diceBonus = new GameValue(0.5f);
+    public GameValue diceBonus = new GameValue(1f);
     [Min(1)] public int diceRollDays = 4;
     [Min(0)] public int diceBuffDays = 3;
 

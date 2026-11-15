@@ -366,7 +366,7 @@ public class ArmyManager : TickBehaviour
     [SerializeField] private Sprite backgroundSprite;
     [SerializeField] private TMP_FontAsset fontAsset;
     [Tooltip("Card size in canvas units at scale 1 (a square).")]
-    [Min(1)] public int regimentSize = 40;
+    [Min(1)] public int regimentSize = 45;
     [Range(0f, 1f)] public float backgroundAlpha = 0.85f;
 
     [Header("Value (what the number on the card means)")]
@@ -381,13 +381,13 @@ public class ArmyManager : TickBehaviour
     [Min(0.01f)] public float prepStepPercent = 1f;
 
     [Header("Regiments")]
-    [Min(1f)] public float manpowerPerRegiment = 10000f;
+    [Min(1f)] public float manpowerPerRegiment = 1000f;
     [Min(1)] public int minRegiments = 1;
     [Min(1)] public int maxRegiments = 30;
 
     [Range(0f, 100f)] public float retreatManpowerPercent = 10f;
     [Min(0f)] public float MinManpowerToRetreat = 5000f;
-    [Range(0f, 1f)] public float reinforcePerDay = 0.02f;
+    [Range(0f, 1f)] public float reinforcePerDay = 0.03f;
     [Min(0f)] public float retreatSpeedTiles = 8f;
 
     [Header("Deploy cost")]
@@ -396,22 +396,23 @@ public class ArmyManager : TickBehaviour
 
     [Header("Movement")]
     [Tooltip("March speed in tiles per game-second.")]
-    [Min(0f)] public float moveSpeedTiles = 4f;
-    [Min(0f)] public float reinforceSpeedTiles = 6f;
+    [Min(0f)] public float moveSpeedTiles = 5f;
+    [Min(0f)] public float reinforceSpeedTiles = 8f;
 
     [Header("Sea movement")]
     public bool allowSeaMovement = true;
     [Range(0.05f, 1f)] public float seaSpeedFactor = 0.5f;
     [Min(1f)] public float seaRangeTiles = 60f;
-    [Min(100)] public int maxSeaNodes = 2500;
+    [Min(100)] public int maxSeaNodes = 6000;
+    [Min(1)] public int seaHops = 8;   // how many connected sea regions one crossing may span
 
     [Header("Visual")]
     [Tooltip("Visible map width (tiles) at which a card has scale 1. Zoom in = bigger cards, zoom out = smaller.")]
     [Min(1f)] public float referenceVisibleTiles = 120f;
-    [Range(0.2f, 1f)] public float minCardScale = 0.5f;
-    [Range(1f, 3f)] public float maxCardScale = 1.25f;
+    [Range(0.2f, 1f)] public float minCardScale = 0.6f;
+    [Range(1f, 3f)] public float maxCardScale = 1.2f;
     [Tooltip("Reinforcement columns are drawn at this share of a regiment card.")]
-    [Range(0.4f, 1f)] public float columnScale = 0.8f;
+    [Range(0.4f, 1f)] public float columnScale = 0.75f;
     [Tooltip("The number is hidden while the card scale is below this (too small to read).")]
     [Range(0f, 1f)] public float hideTextBelowScale = 0.6f;
     [Range(0f, 1f)] public float pileOffset = 0.22f;
@@ -446,6 +447,9 @@ public class ArmyManager : TickBehaviour
 
     private readonly List<Regiment> _enteredR = new List<Regiment>(16);
     private readonly List<Province> _enteredP = new List<Province>(16);
+
+    private readonly Queue<int> _seaQ = new Queue<int>();
+    private int[] _seaDepth;
 
     private RectTransform _root;
     private RegimentView _template;
@@ -814,7 +818,12 @@ public class ArmyManager : TickBehaviour
         }
         if (!found && (!allowSeaMovement || !SeaSearch(from, to, restrict, avoid))) return false;
 
-        for (int c = to.Id; c != from.Id; c = _bfsPrev[c]) result.Add(all[c]);
+        int guard = all.Count + 2;
+        for (int c = to.Id; c != from.Id; c = _bfsPrev[c])
+        {
+            if (c < 0 || c >= all.Count || guard-- <= 0) { result.Clear(); return false; }
+            result.Add(all[c]);
+        }
         result.Reverse();
         return true;
     }
@@ -823,7 +832,7 @@ public class ArmyManager : TickBehaviour
     {
         IReadOnlyList<Province> all = map.Provinces;
         IReadOnlyList<SeaRegion> seas = map.Seas;
-        if (_seaStamp == null || _seaStamp.Length != seas.Count) _seaStamp = new int[seas.Count];
+        if (_seaStamp == null || _seaStamp.Length != seas.Count) { _seaStamp = new int[seas.Count]; _seaDepth = new int[seas.Count]; }
 
         _stamp++;
         _bfsQ.Clear();
@@ -831,7 +840,6 @@ public class ArmyManager : TickBehaviour
         _bfsStamp[from.Id] = _stamp;
         _bfsPrev[from.Id] = -1;
 
-        float r2 = seaRangeTiles * seaRangeTiles;
         int visited = 0;
         while (_bfsQ.Count > 0)
         {
@@ -841,35 +849,50 @@ public class ArmyManager : TickBehaviour
             Province pc = all[c];
 
             int[] nb = pc.Neighbors;
-            for (int i = 0; i < nb.Length; i++) TryVisit(all, nb[i], c, to, restrict, avoid, 0f, pc.Centroid);
+            for (int i = 0; i < nb.Length; i++) TryVisit(all, nb[i], c, to, restrict, avoid);
 
             IReadOnlyList<int> coast = map.GetCoastalSeas(pc);
-            for (int k = 0; k < coast.Count; k++)
-            {
-                SeaRegion s = seas[coast[k]];
-                ExpandSea(all, s, c, pc, to, restrict, avoid, r2);
-                int[] sn = s.Neighbors;
-                for (int n = 0; n < sn.Length; n++) ExpandSea(all, seas[sn[n]], c, pc, to, restrict, avoid, r2);
-            }
+            for (int k = 0; k < coast.Count; k++) FloodSea(all, seas, coast[k], c, to, restrict, avoid);
         }
         return false;
     }
 
-    private void ExpandSea(IReadOnlyList<Province> all, SeaRegion s, int from, Province pc, Province to,
-                           bool restrict, HashSet<int> avoid, float r2)
+    /// <summary>Floods the connected sea regions (up to seaHops) and links every allowed coast province to 'from'.</summary>
+    private void FloodSea(IReadOnlyList<Province> all, IReadOnlyList<SeaRegion> seas, int start, int from, Province to,
+                          bool restrict, HashSet<int> avoid)
     {
-        if (_seaStamp[s.Id] == _stamp) return;
-        _seaStamp[s.Id] = _stamp;
-        int[] land = s.LandNeighbors;
-        for (int i = 0; i < land.Length; i++) TryVisit(all, land[i], from, to, restrict, avoid, r2, pc.Centroid);
+        if (start < 0 || start >= seas.Count || _seaStamp[start] == _stamp) return;
+        _seaQ.Clear();
+        _seaQ.Enqueue(start);
+        _seaStamp[start] = _stamp;
+        _seaDepth[start] = 0;
+
+        while (_seaQ.Count > 0)
+        {
+            int si = _seaQ.Dequeue();
+            SeaRegion s = seas[si];
+
+            int[] land = s.LandNeighbors;
+            for (int i = 0; i < land.Length; i++) TryVisit(all, land[i], from, to, restrict, avoid);
+
+            if (_seaDepth[si] >= seaHops) continue;
+            int[] sn = s.Neighbors;
+            for (int n = 0; n < sn.Length; n++)
+            {
+                int t = sn[n];
+                if (t < 0 || t >= seas.Count || _seaStamp[t] == _stamp) continue;
+                _seaStamp[t] = _stamp;
+                _seaDepth[t] = _seaDepth[si] + 1;
+                _seaQ.Enqueue(t);
+            }
+        }
     }
 
-    private void TryVisit(IReadOnlyList<Province> all, int m, int from, Province to, bool restrict,
-                          HashSet<int> avoid, float maxDist2, Vector2 origin)
+    private void TryVisit(IReadOnlyList<Province> all, int m, int from, Province to, bool restrict, HashSet<int> avoid)
     {
-        if (_bfsStamp[m] == _stamp) return;
+        if (m < 0 || m >= all.Count || _bfsStamp[m] == _stamp) return;
         Province q = all[m];
-        if (maxDist2 > 0f && (q.Centroid - origin).sqrMagnitude > maxDist2) return;
+        if (q.IsMerged) return;
         if (restrict && !Allowed(q)) return;
         if (avoid != null && m != to.Id && avoid.Contains(m)) return;
         _bfsStamp[m] = _stamp;
