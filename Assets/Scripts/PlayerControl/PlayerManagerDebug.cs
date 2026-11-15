@@ -8,7 +8,9 @@ using UnityEngine;
 //   ON  : press Delete 10 times within 2 seconds
 //   OFF : Escape + Delete (hold one, press the other)
 //
-//   While ON (every action is written to the Console as "[Player DEBUG] ..."):
+//   While ON (DebugMode == true) EVERY player action in all three PlayerManager files is written to the Console as
+//   "[Player DEBUG] AREA: what happened" (keys, taps, selection, invest, move, merge army, reinforce, time, modes, ...).
+//   Plus the cheats below (they also show a toast):
 //    CTRL+L        Declare War mode: click a province = the player's nation declares (forced) war on its owner.
 //                  SHIFT+click first = pick ANOTHER attacker, then click the defender. Turns itself off after the war starts.
 //    CTRL+P        End ALL wars (white peace).
@@ -46,7 +48,7 @@ public partial class PlayerManager
     [SerializeField] private KeyCode debugToggleKey = KeyCode.Delete;
     [SerializeField, Min(2)] private int debugPressesNeeded = 10;
     [SerializeField, Min(0.5f)] private float debugPressWindow = 2f;
-    [Tooltip("Every debug action is also written to the Console.")]
+    [Tooltip("Every debug line is also written to the Console (the action log of DebugMode needs this ON).")]
     [SerializeField] private bool debugLogToConsole = true;
 
     [Header("Debug keys (CTRL + key)  -  note: CTRL+P is the Play shortcut of the Unity Editor, CTRL+TAB switches Editor tabs: rebind them there if needed")]
@@ -147,6 +149,7 @@ public partial class PlayerManager
         {
             if (_dbgSub == DebugSubMode.Formation) DebugConfirmFormation();
             else if (_dbgSub == DebugSubMode.MergeProvinces) DebugConfirmMerge();
+            else DebugAct("KEY: ENTER (nothing to confirm, no Formation / Merge mode active)");
         }
     }
 
@@ -160,7 +163,7 @@ public partial class PlayerManager
         PlayerEvents.RaiseDebugModeChanged(on);
 
         if (on)
-            DebugLog("MODE ON  |  CTRL+L declare war  |  CTRL+P end all wars  |  CTRL+TAB summon army mode (click a province)  |  " +
+            DebugLog("MODE ON  |  every player action is logged to the Console  |  CTRL+L declare war  |  CTRL+P end all wars  |  CTRL+TAB summon army mode (click a province)  |  " +
                      "CTRL+F formation (SHIFT+click select, ENTER confirm)  |  CTRL+M merge provinces (SHIFT+click select, ENTER confirm)  |  ESC + DELETE = off");
         else DebugLog("MODE OFF");
     }
@@ -495,8 +498,9 @@ public partial class PlayerManager
 
     #endregion
 
-    #region Helpers
+    #region Helpers (logging)
 
+    /// <summary>Cheat feedback: Console AND toast (always, the cheat modes are only reachable in debug anyway).</summary>
     private void DebugLog(string message)
     {
         if (debugLogToConsole) Debug.Log("[Player DEBUG] " + message);
@@ -507,6 +511,40 @@ public partial class PlayerManager
     {
         if (debugLogToConsole) Debug.LogWarning("[Player DEBUG] " + message);
         PlayerEvents.RaiseMessage("[DEBUG] " + message);
+    }
+
+    /// <summary>
+    /// Action log: ONE Console line for every player action, only while DebugMode is ON (no toast).
+    /// Call sites guard with "if (DebugMode)" so no string is built while debug is off.
+    /// </summary>
+    private void DebugAct(string message)
+    {
+        if (DebugMode && debugLogToConsole) Debug.Log("[Player DEBUG] " + message);
+    }
+
+    private static string ProvinceName(Province p) => p != null ? p.Name + " (#" + p.Id + ")" : "nothing (water / outside)";
+
+    /// <summary>Short regiment description for the log: uid, men, strength, state, province.</summary>
+    private static string DbgReg(Regiment r)
+    {
+        if (r == null) return "null";
+        Province p = r.CurrentProvince ?? r.LocationProvince;
+        return "#" + r.Uid + " " + r.Manpower.ToString("N0") + " men (" + (r.StrengthPercent * 100f).ToString("F0") + " %, " + r.State + ") @ " + (p != null ? p.Name : "?");
+    }
+
+    private double DbgSelectedMen()
+    {
+        double men = 0.0;
+        for (int i = 0; i < _selected.Count; i++) if (_selected[i].Military != null) men += _selected[i].Manpower;
+        return men;
+    }
+
+    private static string DbgProvinces(IList<Province> list)
+    {
+        if (list == null || list.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder("[");
+        for (int i = 0; i < list.Count; i++) sb.Append(i > 0 ? " > " : "").Append(list[i] != null ? list[i].Name : "?");
+        return sb.Append(']').ToString();
     }
 
     /// <summary>Ring + label on the capital of a nation (only when tactic visuals are enabled).</summary>

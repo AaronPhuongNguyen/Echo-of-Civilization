@@ -1590,6 +1590,32 @@ MonoBehaviour:
   pathSampleTiles: 1.5
   logSelection: 1
   statusInterval: 0.25
+  mergeKey: 103
+  reinforceKey: 116
+  autoBattleKey: 98
+  haltKey: 120
+  selectIdleKey: 113
+  selectWoundedKey: 101
+  selectInProvinceKey: 118
+  reinforceColumns: 3
+  reinforceMaxRegiments: 12
+  woundedBelow: 0.8
+  routePlayerColumns: 1
+  columnRouteInterval: 0.5
+  createSelectionVisuals: 1
+  allowDebugMode: 1
+  debugToggleKey: 127
+  debugPressesNeeded: 3
+  debugPressWindow: 1
+  debugLogToConsole: 1
+  debugWarKey: 108
+  debugEndWarsKey: 112
+  debugFormKey: 102
+  debugSummonKey: 9
+  debugMergeKey: 109
+  debugArmyRegiments: 1
+  debugMenPerRegiment: 10000
+  debugMergeAutoCount: 3
 --- !u!1 &2034183097
 GameObject:
   m_ObjectHideFlags: 0

@@ -7,6 +7,7 @@ using UnityEngine;
 //   Merge army | Call reinforcement | Auto battle | Halt | Quick selects | Control groups
 //   Every command has: a keybinding (Military mode), a Request... method for UI buttons and a PlayerEvents intent.
 //   Requires `partial` on PlayerManager, PlayerStatus and PlayerEvents (see PATCHES.md).
+//   Every command writes "[Player DEBUG] ..." to the Console while DebugMode is ON.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #region Events (partial of PlayerEvents)
@@ -129,7 +130,13 @@ public partial class PlayerManager
         if (!_visualsChecked) { _visualsChecked = true; EnsureSelectionVisuals(); }
 
         bool auto = AutoBattle;                                  // AIManager can switch it off (player changed, nations cleared)
-        if (auto != _lastAuto) { _lastAuto = auto; _nextStatus = 0f; PlayerEvents.RaiseAutoBattleChanged(auto); }
+        if (auto != _lastAuto)
+        {
+            _lastAuto = auto;
+            _nextStatus = 0f;
+            if (DebugMode) DebugAct("AUTO BATTLE: changed by the AI manager -> " + (auto ? "ON" : "OFF"));
+            PlayerEvents.RaiseAutoBattleChanged(auto);
+        }
 
         RoutePlayerColumns();
     }
@@ -177,18 +184,18 @@ public partial class PlayerManager
     private void ReadArmyKeys()
     {
         if (_mode == PlayerMode.Invest) return;
-        if (Input.GetKeyDown(autoBattleKey)) RequestToggleAutoBattle();
+        if (Input.GetKeyDown(autoBattleKey)) { if (DebugMode) DebugAct("KEY: " + autoBattleKey + " (auto battle)"); RequestToggleAutoBattle(); }
         if (_mode != PlayerMode.Military) return;
 
-        if (Input.GetKeyDown(mergeKey)) RequestMergeArmy();
-        if (Input.GetKeyDown(reinforceKey)) RequestCallReinforcement();
-        if (Input.GetKeyDown(haltKey)) RequestHalt();
-        if (Input.GetKeyDown(selectIdleKey)) RequestSelectIdle();
-        if (Input.GetKeyDown(selectWoundedKey)) RequestSelectWounded();
-        if (Input.GetKeyDown(selectInProvinceKey)) RequestSelectInProvince();
+        if (Input.GetKeyDown(mergeKey)) { if (DebugMode) DebugAct("KEY: " + mergeKey + " (merge army)"); RequestMergeArmy(); }
+        if (Input.GetKeyDown(reinforceKey)) { if (DebugMode) DebugAct("KEY: " + reinforceKey + " (call reinforcement)"); RequestCallReinforcement(); }
+        if (Input.GetKeyDown(haltKey)) { if (DebugMode) DebugAct("KEY: " + haltKey + " (halt)"); RequestHalt(); }
+        if (Input.GetKeyDown(selectIdleKey)) { if (DebugMode) DebugAct("KEY: " + selectIdleKey + " (select idle)"); RequestSelectIdle(); }
+        if (Input.GetKeyDown(selectWoundedKey)) { if (DebugMode) DebugAct("KEY: " + selectWoundedKey + " (select wounded)"); RequestSelectWounded(); }
+        if (Input.GetKeyDown(selectInProvinceKey)) { if (DebugMode) DebugAct("KEY: " + selectInProvinceKey + " (select in province)"); RequestSelectInProvince(); }
 
         int n = NumberKeyDown();                                   // 1..9 recalls a control group (CTRL+SHIFT+1..9 saves it)
-        if (n >= 0) RequestRecallGroup(n);
+        if (n >= 0) { if (DebugMode) DebugAct("KEY: " + (n + 1) + " (recall group)"); RequestRecallGroup(n); }
     }
 
     #endregion
@@ -274,7 +281,7 @@ public partial class PlayerManager
     private void HandleMergeArmy()
     {
         Military m = MilitaryOf();
-        if (m == null) return;
+        if (m == null) { if (DebugMode) DebugAct("MERGE ARMY: no military."); return; }
         CollectTargets(_tmp);
 
         var byProvince = new Dictionary<Province, List<Regiment>>();
@@ -299,9 +306,13 @@ public partial class PlayerManager
             double total = 0.0;
             for (int i = 0; i < g.Count; i++) total += g[i].Manpower;
 
-            for (int i = 1; i < g.Count; i++) if (m.RemoveRegiment(g[i])) removed++;
+            int removedHere = 0;
+            for (int i = 1; i < g.Count; i++) if (m.RemoveRegiment(g[i])) { removed++; removedHere++; }
             keep.Manpower = Math.Min(total, keep.Allocation);        // Allocation grows: fewer regiments share the same pool
             keep.RefreshText();
+            if (DebugMode)
+                DebugAct("MERGE ARMY: " + kv.Key.Name + ": " + (removedHere + 1) + " regiments -> 1 (" + total.ToString("N0") + " men, kept " +
+                         keep.Manpower.ToString("N0") + ", allocation " + keep.Allocation.ToString("N0") + ")");
             menBefore += total;
             menKept += keep.Manpower;
             keepers.Add(keep);
@@ -311,6 +322,10 @@ public partial class PlayerManager
         for (int i = 0; i < keepers.Count; i++) if (!_selected.Contains(keepers[i])) _selected.Add(keepers[i]);
         if (groups > 0) SelectionChanged();
 
+        if (DebugMode)
+            DebugAct("MERGE ARMY: " + (groups > 0 ? groups + " stacks merged, " + removed + " regiments removed, " + menKept.ToString("N0") + " men kept, " +
+                                       (menBefore - menKept).ToString("N0") + " back to reserve"
+                                     : "nothing to merge (" + _tmp.Count + " candidate regiments, none stacked in one province)"));
         PlayerEvents.RaiseCommandResult("Merge army", removed, 0);
         PlayerEvents.RaiseMessage(groups > 0
             ? "Merged " + (removed + groups) + " regiments into " + groups + " (" + menKept.ToString("N0") + " men" +
@@ -326,7 +341,7 @@ public partial class PlayerManager
     /// <summary>Weakest regiments first: CombatManager spawns merge columns (men are paid from the treasury).</summary>
     private void HandleCallReinforcement()
     {
-        if (!CombatManager.HasInstance) return;
+        if (!CombatManager.HasInstance) { if (DebugMode) DebugAct("REINFORCE: no CombatManager."); return; }
         CollectTargets(_tmp);
         _tmp.Sort((a, b) => a.StrengthPercent.CompareTo(b.StrengthPercent));
 
@@ -337,9 +352,18 @@ public partial class PlayerManager
             Regiment r = _tmp[i];
             if (r.State == RegimentState.Retreating) continue; //player can call whatever
             left--;
-            if (cm.ForceReinforce(r, reinforceColumns)) ok++; else fail++;
+            bool sent = cm.ForceReinforce(r, reinforceColumns);
+            if (sent) ok++; else fail++;
+            if (DebugMode) DebugAct("REINFORCE: " + DbgReg(r) + " strength " + (r.StrengthPercent * 100f).ToString("F0") + " % -> " + (sent ? "columns sent" : "not needed / not possible"));
         }
 
+        if (DebugMode)
+        {
+            Military m = MilitaryOf();
+            DebugAct("REINFORCE: " + _tmp.Count + " candidates, " + ok + " got columns, " + fail + " failed" +
+                     (m != null ? "  | free men " + Math.Max(0.0, m.CurrentManpower - m.TotalRegimentManpower()).ToString("N0") +
+                                  ", treasury " + (PlayerNation != null ? PlayerNation.Treasury.ToString("N1") : "-") : ""));
+        }
         PlayerEvents.RaiseCommandResult("Reinforce", ok, fail);
         if (ok == 0) PlayerEvents.RaiseMessage(fail > 0 ? "Cannot reinforce (no free men or treasury)." : "Everything is at full strength.");
         else PlayerEvents.RaiseMessage("Reinforcements sent to " + ok + " regiments");
@@ -364,13 +388,19 @@ public partial class PlayerManager
         {
             Regiment c = m.Columns[i];
             if (c.Role != ColumnRole.Merge || c.Military == null) continue;
-            if (cm.TryMergeColumn(c)) continue;
+            double colMen = c.Manpower;
+            if (cm.TryMergeColumn(c))
+            {
+                if (DebugMode) DebugAct("COLUMN: " + colMen.ToString("N0") + " men merged into their regiment.");
+                continue;
+            }
 
             Regiment t = c.MergeTarget;
             if (t == null || t.Military != m || t.Allocation - t.Manpower < 1.0)
             {
                 t = BestMergeTarget(m, c);
                 c.MergeTarget = t;
+                if (DebugMode) DebugAct("COLUMN: " + colMen.ToString("N0") + " men got a new target " + (t != null ? DbgReg(t) : "(none)"));
             }
             if (t == null) continue;
             Province dest = t.HasPath ? t.Destination : (t.LocationProvince ?? t.Province);
@@ -404,10 +434,18 @@ public partial class PlayerManager
     /// </summary>
     public void SetAutoBattle(bool on)
     {
-        if (PlayerNation == null) { PlayerEvents.RaiseMessage("No player nation."); return; }
+        if (PlayerNation == null)
+        {
+            if (DebugMode) DebugAct("AUTO BATTLE: refused, no player nation.");
+            PlayerEvents.RaiseMessage("No player nation.");
+            return;
+        }
         AIManager.Instance.SetAutoBattle(PlayerNation, on);
         _lastAuto = AutoBattle;
         _nextStatus = 0f;
+        if (DebugMode)
+            DebugAct("AUTO BATTLE: requested " + (on ? "ON" : "OFF") + " -> now " + (_lastAuto ? "ON" : "OFF") +
+                     (WarManager.HasInstance && !WM.IsAtWar(PlayerNation) ? "  (no war running: the AI only commands in war)" : ""));
         PlayerEvents.RaiseAutoBattleChanged(_lastAuto);
         PlayerEvents.RaiseMessage(_lastAuto ? "Auto battle ON (AI commands idle regiments in war)" : "Auto battle OFF");
     }
@@ -427,7 +465,8 @@ public partial class PlayerManager
             Province p = r.CurrentProvince ?? r.LocationProvince;
             if (p != null && Army.MoveRegiment(r, p)) { ok++; HoldForManual(r); } else fail++;
         }
-        if (ok + fail == 0) return;
+        if (ok + fail == 0) { if (DebugMode) DebugAct("HALT: no own regiments selected."); return; }
+        if (DebugMode) DebugAct("HALT: " + ok + " regiments halted, " + fail + " failed");
         PlayerEvents.RaiseCommandResult("Halt", ok, fail);
         _nextStatus = 0f;
     }
@@ -439,7 +478,7 @@ public partial class PlayerManager
     private void SelectWhere(Func<Regiment, bool> filter, string label)
     {
         Military m = MilitaryOf();
-        if (m == null) return;
+        if (m == null) { if (DebugMode) DebugAct("SELECT: no military."); return; }
 
         _tmp.Clear();
         for (int i = 0; i < m.Regiments.Count; i++)
@@ -447,10 +486,16 @@ public partial class PlayerManager
             Regiment r = m.Regiments[i];
             if (r.Military != null && !r.IsColumn && filter(r)) _tmp.Add(r);
         }
-        if (_tmp.Count == 0) { PlayerEvents.RaiseMessage("No " + label); return; }
+        if (_tmp.Count == 0)
+        {
+            if (DebugMode) DebugAct("SELECT: none found (" + label + ")");
+            PlayerEvents.RaiseMessage("No " + label);
+            return;
+        }
 
         if (!AdditiveHeld) ClearSelectionSilently();
         for (int i = 0; i < _tmp.Count; i++) if (!_selected.Contains(_tmp[i])) _selected.Add(_tmp[i]);
+        if (DebugMode) DebugAct("SELECT: " + _tmp.Count + " " + label + ", total selected " + _selected.Count + " (" + DbgSelectedMen().ToString("N0") + " men)");
         SelectionChanged();
         PlayerEvents.RaiseMessage(_tmp.Count + " " + label);
     }
@@ -471,7 +516,12 @@ public partial class PlayerManager
             if (p != null) _provSet.Add(p.Id);
         }
         if (_provSet.Count == 0 && SelectedProvince != null) _provSet.Add(SelectedProvince.Id);
-        if (_provSet.Count == 0) { PlayerEvents.RaiseMessage("Select a regiment or province first."); return; }
+        if (_provSet.Count == 0)
+        {
+            if (DebugMode) DebugAct("SELECT: select-in-province needs a selected regiment or province.");
+            PlayerEvents.RaiseMessage("Select a regiment or province first.");
+            return;
+        }
 
         SelectWhere(r =>
         {
@@ -486,8 +536,14 @@ public partial class PlayerManager
         var list = new List<Regiment>(_selected.Count);
         for (int i = 0; i < _selected.Count; i++)
             if (_selected[i].Military != null && _selected[i].Military.Nation == PlayerNation && !_selected[i].IsColumn) list.Add(_selected[i]);
-        if (list.Count == 0) { PlayerEvents.RaiseMessage("Select regiments first."); return; }
+        if (list.Count == 0)
+        {
+            if (DebugMode) DebugAct("GROUP: save " + (slot + 1) + " refused, nothing selected.");
+            PlayerEvents.RaiseMessage("Select regiments first.");
+            return;
+        }
         _groups[slot] = list;
+        if (DebugMode) DebugAct("GROUP: " + (slot + 1) + " saved with " + list.Count + " regiments");
         PlayerEvents.RaiseMessage("Group " + (slot + 1) + " saved (" + list.Count + ")");
     }
 
@@ -495,13 +551,25 @@ public partial class PlayerManager
     {
         if (slot < 0 || slot >= _groups.Length) return;
         List<Regiment> g = _groups[slot];
-        if (g == null) { PlayerEvents.RaiseMessage("Group " + (slot + 1) + " is empty."); return; }
+        if (g == null)
+        {
+            if (DebugMode) DebugAct("GROUP: " + (slot + 1) + " is empty.");
+            PlayerEvents.RaiseMessage("Group " + (slot + 1) + " is empty.");
+            return;
+        }
 
         g.RemoveAll(r => r == null || r.Military == null || r.Military.Nation != PlayerNation);
-        if (g.Count == 0) { _groups[slot] = null; PlayerEvents.RaiseMessage("Group " + (slot + 1) + " is gone."); return; }
+        if (g.Count == 0)
+        {
+            _groups[slot] = null;
+            if (DebugMode) DebugAct("GROUP: " + (slot + 1) + " is gone (all its regiments are lost).");
+            PlayerEvents.RaiseMessage("Group " + (slot + 1) + " is gone.");
+            return;
+        }
 
         if (!AdditiveHeld) ClearSelectionSilently();
         for (int i = 0; i < g.Count; i++) if (!_selected.Contains(g[i])) _selected.Add(g[i]);
+        if (DebugMode) DebugAct("GROUP: " + (slot + 1) + " recalled, " + g.Count + " regiments, total selected " + _selected.Count);
         SelectionChanged();
         PlayerEvents.RaiseMessage("Group " + (slot + 1) + " (" + g.Count + ")");
     }

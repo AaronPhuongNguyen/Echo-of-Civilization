@@ -29,7 +29,7 @@ public class TickManager : MonoBehaviour
     #region Inspector (applied once when a TickManager placed in the scene wakes up)
     [Header("Time")]
     [SerializeField] private float startGameSpeed = 1f;
-    [SerializeField] private bool startPaused=true;
+    [SerializeField] private bool startPaused = true;
     [SerializeField] private float maxGameSpeed = 5f;
     [Tooltip("Frame time is clamped to this (phone lag spikes / resume from background).")]
     [SerializeField] private float maxFrameTime = 0.1f;
@@ -112,6 +112,37 @@ public class TickManager : MonoBehaviour
     public static void Resume() => Paused = false;
     public static void TogglePause() => Paused = !Paused;
     public static void SetGameSpeed(float speed) => GameSpeed = speed;
+    #endregion
+
+    #region Speed steps (Speed Up / Speed Down)
+    /// <summary>The speeds SpeedUp / SpeedDown walk through. GameSpeed is still clamped to MaxGameSpeed.</summary>
+    private static readonly float[] SpeedSteps = { 0.5f, 1f, 2f, 3f, 4f, 5f };
+
+    /// <summary>Next faster step (0.5 > 1 > 2 > 3 > 4 > 5). Already at the top: nothing happens. Does not change pause.</summary>
+    public static void SpeedUp()
+    {
+        for (int i = 0; i < SpeedSteps.Length; i++)
+        {
+            if (SpeedSteps[i] > _gameSpeed + 0.001f)
+            {
+                GameSpeed = SpeedSteps[i];
+                return;
+            }
+        }
+    }
+
+    /// <summary>Next slower step. Already at the bottom: nothing happens. Does not change pause.</summary>
+    public static void SpeedDown()
+    {
+        for (int i = SpeedSteps.Length - 1; i >= 0; i--)
+        {
+            if (SpeedSteps[i] < _gameSpeed - 0.001f)
+            {
+                GameSpeed = SpeedSteps[i];
+                return;
+            }
+        }
+    }
     #endregion
 
     #region Timers
@@ -261,6 +292,27 @@ public class TickManager : MonoBehaviour
             GameSpeed = startGameSpeed;
             Paused = startPaused;
         }
+    }
+
+    private void OnEnable()
+    {
+        if (_runner != this) return;                 // a duplicate that is about to be destroyed must not listen
+
+        // unsubscribe first: no double subscription if the component is disabled / enabled again
+        EventBus.OnTogglePause -= TogglePause;
+        EventBus.OnSpeedUp -= SpeedUp;
+        EventBus.OnSpeedDown -= SpeedDown;
+
+        EventBus.OnTogglePause += TogglePause;
+        EventBus.OnSpeedUp += SpeedUp;
+        EventBus.OnSpeedDown += SpeedDown;
+    }
+
+    private void OnDisable()
+    {
+        EventBus.OnTogglePause -= TogglePause;
+        EventBus.OnSpeedUp -= SpeedUp;
+        EventBus.OnSpeedDown -= SpeedDown;
     }
 
     private void OnDestroy() { if (_runner == this) _runner = null; }

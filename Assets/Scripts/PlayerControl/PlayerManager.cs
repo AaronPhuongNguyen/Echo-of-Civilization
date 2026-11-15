@@ -149,6 +149,9 @@ public static partial class PlayerEvents
 //     and PlayerEvents for everything the player does.
 //   - modes (Normal / Invest / Military), selection (Regiment > Province > none), invest + military commands
 //   - PlayerStatus: quick access for the UI
+//
+//   DEBUG OUTPUT: while DebugMode is ON (Delete x10), EVERY player action is written to the Console as
+//   "[Player DEBUG] AREA: what happened" (see DebugAct in PlayerManager.Debug.cs).
 // ─────────────────────────────────────────────────────────────────────────────
 [DefaultExecutionOrder(-1050)]
 public partial class PlayerManager : TickBehaviour
@@ -489,6 +492,7 @@ public partial class PlayerManager : TickBehaviour
         ClearSelectionSilently();
         SwitchMode(PlayerMode.Normal);
         _nextStatus = 0f;
+        if (DebugMode) DebugAct("PLAYER: nation = " + (n != null ? n.Name : "none") + " (was " + (old != null ? old.Name : "none") + ")");
         OnPlayerChanged?.Invoke(old, n);
         return true;
     }
@@ -502,6 +506,7 @@ public partial class PlayerManager : TickBehaviour
         ClearSelectionSilently();
         SwitchMode(PlayerMode.Normal);
         _nextStatus = 0f;
+        if (DebugMode) DebugAct("PLAYER: nations cleared, no player nation any more.");
     }
 
     private void HandleRemoved(Nation n)
@@ -511,12 +516,14 @@ public partial class PlayerManager : TickBehaviour
             n.IsPlayer = false; PlayerNation = null; playerNationName = "";
             ClearSelectionSilently();
             SwitchMode(PlayerMode.Normal);
+            if (DebugMode) DebugAct("PLAYER: the player nation " + n.Name + " was removed.");
             OnPlayerChanged?.Invoke(n, null);
         }
     }
 
     private void HandleMerged(Province origin, IReadOnlyList<Province> absorbed)
     {
+        if (DebugMode) DebugAct("MAP: provinces merged into " + (origin != null ? origin.Name : "?") + " (" + (absorbed != null ? absorbed.Count : 0) + " absorbed).");
         if (SelectedProvince != null && SelectedProvince.IsMerged)
         {
             SelectedProvince = map.GetProvince(SelectedProvince.MergedInto);
@@ -526,7 +533,11 @@ public partial class PlayerManager : TickBehaviour
 
     private void HandleRegimentRemoved(Regiment r, bool destroyed)
     {
-        if (_selected.Remove(r)) SelectionChanged();
+        if (_selected.Remove(r))
+        {
+            if (DebugMode) DebugAct("SELECT: a selected regiment was " + (destroyed ? "destroyed" : "removed") + ", " + _selected.Count + " left selected.");
+            SelectionChanged();
+        }
     }
 
     #endregion
@@ -547,7 +558,12 @@ public partial class PlayerManager : TickBehaviour
     /// <summary>Slot = the number key minus one (0 = key "1").</summary>
     public void RequestInvestSlot(int slot)
     {
-        if (slot < 0 || slot >= investSlots.Length) { PlayerEvents.RaiseSetMode(PlayerMode.Normal); return; }   // invalid -> exit mode
+        if (slot < 0 || slot >= investSlots.Length)
+        {
+            if (DebugMode) DebugAct("INVEST: slot " + (slot + 1) + " is not a stat, leaving the mode.");
+            PlayerEvents.RaiseSetMode(PlayerMode.Normal);                  // invalid -> exit mode
+            return;
+        }
         PlayerEvents.RaiseSelectInvestStat(investSlots[slot]);
     }
     public void RequestInvestPopGrowth() => PlayerEvents.RaiseSelectInvestStat(StatType.PopGrowth);
@@ -556,20 +572,44 @@ public partial class PlayerManager : TickBehaviour
     public void RequestInvestInfrastructure() => PlayerEvents.RaiseSelectInvestStat(StatType.Infrastructure);
     public void RequestInvestDefend() => PlayerEvents.RaiseSelectInvestStat(StatType.Defend);
     /// <summary>Invest the chosen stat in ALL provinces equally until the treasury is used up.</summary>
-    public void RequestInvestAll() { if (_hasInvestStat) PlayerEvents.RaiseInvestAll(_investStat); else PlayerEvents.RaiseMessage("Choose a stat first."); }
+    public void RequestInvestAll()
+    {
+        if (_hasInvestStat) PlayerEvents.RaiseInvestAll(_investStat);
+        else
+        {
+            if (DebugMode) DebugAct("INVEST: invest-all refused, no stat chosen.");
+            PlayerEvents.RaiseMessage("Choose a stat first.");
+        }
+    }
     /// <summary>One increase in the SELECTED province using the chosen stat.</summary>
     public void RequestInvestSelected()
     {
-        if (!_hasInvestStat) { PlayerEvents.RaiseMessage("Choose a stat first."); return; }
+        if (!_hasInvestStat)
+        {
+            if (DebugMode) DebugAct("INVEST: invest-selected refused, no stat chosen.");
+            PlayerEvents.RaiseMessage("Choose a stat first.");
+            return;
+        }
         if (SelectedProvince != null) PlayerEvents.RaiseInvest(SelectedProvince, _investStat);
+        else if (DebugMode) DebugAct("INVEST: invest-selected refused, no province selected.");
     }
     public void RequestInvestProvince(Province p, StatType stat) => PlayerEvents.RaiseInvest(p, stat);
 
     // ── selection ──
     public void RequestSelectAll() => PlayerEvents.RaiseSelectAllRegiments();
     public void RequestClearSelection() => PlayerEvents.RaiseClearSelection();
-    public void RequestToggleAdditive() { _additiveToggle = !_additiveToggle; _nextStatus = 0f; }
-    public void RequestTogglePathDraw() { _pathArmed = !_pathArmed; _nextStatus = 0f; }
+    public void RequestToggleAdditive()
+    {
+        _additiveToggle = !_additiveToggle;
+        _nextStatus = 0f;
+        if (DebugMode) DebugAct("INPUT: additive selection toggle = " + (_additiveToggle ? "ON" : "OFF"));
+    }
+    public void RequestTogglePathDraw()
+    {
+        _pathArmed = !_pathArmed;
+        _nextStatus = 0f;
+        if (DebugMode) DebugAct("INPUT: path drawing armed = " + (_pathArmed ? "ON" : "OFF"));
+    }
 
     // ── military ──
     public void RequestMoveSelected(Province p) => PlayerEvents.RaiseMoveSelected(p);
@@ -595,16 +635,30 @@ public partial class PlayerManager : TickBehaviour
     /// <summary>Pause / speed work in EVERY mode (Normal, Invest, Military, debug click modes), even with enableKeyboard off.</summary>
     private void ReadTimeKeys()
     {
-        if (Input.GetKeyDown(pauseKey)) EventBus.RaiseTogglePause();
-        if (Input.GetKeyDown(speedUpKey)) EventBus.RaiseSpeedUp();
-        if (Input.GetKeyDown(speedDownKey)) EventBus.RaiseSpeedDown();
+        if (Input.GetKeyDown(pauseKey))
+        {
+            EventBus.RaiseTogglePause();
+            if (DebugMode) DebugAct("TIME: pause toggled (" + pauseKey + ", mode " + _mode + ")");
+        }
+        if (Input.GetKeyDown(speedUpKey))
+        {
+            EventBus.RaiseSpeedUp();
+            if (DebugMode) DebugAct("TIME: speed UP (" + speedUpKey + ", mode " + _mode + ")");
+        }
+        if (Input.GetKeyDown(speedDownKey))
+        {
+            EventBus.RaiseSpeedDown();
+            if (DebugMode) DebugAct("TIME: speed DOWN (" + speedDownKey + ", mode " + _mode + ")");
+        }
     }
+
     private void ReadKeyboard()
     {
         if (Input.GetKeyDown(focusCapitalKey) && !(DebugMode && CtrlKey()))
         {
             bool hasMouse = Input.mousePresent && !Application.isMobilePlatform;
             EventBus.RaiseFocusCapital(Input.mousePosition, hasMouse);
+            if (DebugMode) DebugAct("CAMERA: focus capital (" + focusCapitalKey + ", " + (hasMouse ? "nation under the mouse" : "screen centre") + ")");
         }
 
         bool ctrl = CtrlKey();
@@ -628,14 +682,14 @@ public partial class PlayerManager : TickBehaviour
     /// <summary>CTRL + I / M / R / A / number. Returns true when a combo was used.</summary>
     private bool ReadCtrlCombos()
     {
-        if (Input.GetKeyDown(investKey)) { RequestToggleInvestMode(); return true; }
-        if (Input.GetKeyDown(militaryKey)) { RequestToggleMilitaryMode(); return true; }
-        if (Input.GetKeyDown(returnKey)) { RequestReturnToNation(); return true; }
-        if (_mode == PlayerMode.Military && Input.GetKeyDown(selectAllKey)) { RequestSelectAll(); return true; }
+        if (Input.GetKeyDown(investKey)) { if (DebugMode) DebugAct("KEY: CTRL+" + investKey + " (invest mode)"); RequestToggleInvestMode(); return true; }
+        if (Input.GetKeyDown(militaryKey)) { if (DebugMode) DebugAct("KEY: CTRL+" + militaryKey + " (military mode)"); RequestToggleMilitaryMode(); return true; }
+        if (Input.GetKeyDown(returnKey)) { if (DebugMode) DebugAct("KEY: CTRL+" + returnKey + " (return to nation)"); RequestReturnToNation(); return true; }
+        if (_mode == PlayerMode.Military && Input.GetKeyDown(selectAllKey)) { if (DebugMode) DebugAct("KEY: CTRL+" + selectAllKey + " (select all)"); RequestSelectAll(); return true; }
         int n = NumberKeyDown();
         if (_mode == PlayerMode.Military && ShiftKey())          // CTRL+SHIFT+1..9 = save control group
         { int g = NumberKeyDown(); if (g >= 0) { RequestSaveGroup(g); return true; } }
-        if (n >= 0) { RequestInvestSlot(n); return true; }            // CTRL + number: straight into that invest mode
+        if (n >= 0) { if (DebugMode) DebugAct("KEY: CTRL+" + (n + 1) + " (invest slot)"); RequestInvestSlot(n); return true; }   // CTRL + number: straight into that invest mode
         return false;
     }
 
@@ -643,22 +697,35 @@ public partial class PlayerManager : TickBehaviour
     {
         if (Input.GetKeyDown(cancelKey))
         {
-            if (_mode != PlayerMode.Normal) RequestNormalMode(); else RequestClearSelection();
+            if (_mode != PlayerMode.Normal)
+            {
+                if (DebugMode) DebugAct("KEY: " + cancelKey + " (leave " + _mode + " mode)");
+                RequestNormalMode();
+            }
+            else
+            {
+                if (DebugMode) DebugAct("KEY: " + cancelKey + " (clear selection)");
+                RequestClearSelection();
+            }
             return;
         }
 
         if (_mode == PlayerMode.Invest)
         {
             int n = NumberKeyDown();
-            if (n >= 0) { RequestInvestSlot(n); return; }
-            if (_hasInvestStat) { if (Input.GetKeyDown(investAllKey)) RequestInvestAll(); }
-            else if (AnyInvalidKeyDown()) RequestNormalMode();          // waiting for a number: anything else exits
+            if (n >= 0) { if (DebugMode) DebugAct("KEY: " + (n + 1) + " (invest slot)"); RequestInvestSlot(n); return; }
+            if (_hasInvestStat) { if (Input.GetKeyDown(investAllKey)) { if (DebugMode) DebugAct("KEY: " + investAllKey + " (invest in ALL provinces)"); RequestInvestAll(); } }
+            else if (AnyInvalidKeyDown())                                // waiting for a number: anything else exits
+            {
+                if (DebugMode) DebugAct("KEY: not a stat number, leaving Invest mode.");
+                RequestNormalMode();
+            }
         }
         else if (_mode == PlayerMode.Military)
         {
-            if (Input.GetKeyDown(recallKey)) RequestRecall();
-            if (Input.GetKeyDown(prepUpKey)) RequestPrepUp();
-            if (Input.GetKeyDown(prepDownKey)) RequestPrepDown();
+            if (Input.GetKeyDown(recallKey)) { if (DebugMode) DebugAct("KEY: " + recallKey + " (recall to capital)"); RequestRecall(); }
+            if (Input.GetKeyDown(prepUpKey)) { if (DebugMode) DebugAct("KEY: " + prepUpKey + " (preparation up)"); RequestPrepUp(); }
+            if (Input.GetKeyDown(prepDownKey)) { if (DebugMode) DebugAct("KEY: " + prepDownKey + " (preparation down)"); RequestPrepDown(); }
         }
         ReadArmyKeys();
     }
@@ -709,6 +776,7 @@ public partial class PlayerManager : TickBehaviour
             {
                 _pinching = true;
                 _lastPinchDist = dist;
+                if (DebugMode) DebugAct("INPUT: pinch started" + (_dragging ? " (cancels the running drag)" : ""));
                 if (_dragging) CancelPress();            // a pinch cancels the drag
             }
             else
@@ -730,7 +798,10 @@ public partial class PlayerManager : TickBehaviour
     private void ReadPointer(float dt)
     {
         if (Input.mousePresent && !Application.isMobilePlatform && Input.GetMouseButtonDown(1) && !IsOverUI(-1))
+        {
+            if (DebugMode) DebugAct("INPUT: right click at " + Input.mousePosition + " (mode " + _mode + ")");
             PlayerEvents.RaiseSecondaryAt(Input.mousePosition);                 // right click
+        }
 
         bool got = TryGetPointer(out Vector2 pos, out bool began, out bool ended);
         if (got)
@@ -784,9 +855,14 @@ public partial class PlayerManager : TickBehaviour
         if (_pressHeld < longPressSeconds) return;
 
         _longFired = true;                                                      // once per press
-        if (_mode == PlayerMode.Military && OwnSelectedCount() > 0) PlayerEvents.RaiseSecondaryAt(pos);   // = right click on touch
+        if (_mode == PlayerMode.Military && OwnSelectedCount() > 0)
+        {
+            if (DebugMode) DebugAct("INPUT: long press at " + pos + " = right click (move order)");
+            PlayerEvents.RaiseSecondaryAt(pos);                                 // = right click on touch
+        }
         else
         {
+            if (DebugMode) DebugAct("INPUT: long press at " + pos + " on " + ProvinceName(ProvinceAt(pos)));
             EventBus.RaiseLongPress(pos);
             EventBus.RaiseProvinceLongPressed(ScreenToWorld(pos), ProvinceAt(pos));
         }
@@ -809,7 +885,12 @@ public partial class PlayerManager : TickBehaviour
                 EventBus.RaiseDragEnd();
                 break;
             case DragIntent.Box:
-                if (moved) { PlayerEvents.RaiseBoxSelectVisual(default, false); PlayerEvents.RaiseSelectBox(MakeRect(start, pos), additive); }
+                if (moved)
+                {
+                    if (DebugMode) DebugAct("INPUT: selection box " + MakeRect(start, pos) + (additive ? " (additive)" : ""));
+                    PlayerEvents.RaiseBoxSelectVisual(default, false);
+                    PlayerEvents.RaiseSelectBox(MakeRect(start, pos), additive);
+                }
                 break;
             case DragIntent.Path:
                 PlayerEvents.RaisePathVisual(_pathPts, false);
@@ -820,6 +901,8 @@ public partial class PlayerManager : TickBehaviour
         if (tap)
         {
             EventBus.RaiseTap(pos);
+            if (DebugMode) DebugAct("INPUT: tap at " + pos + " on " + ProvinceName(ProvinceAt(pos)) + " (mode " + _mode +
+                                    (_dbgSub != DebugSubMode.None ? ", debug " + _dbgSub : "") + (additive ? ", additive" : "") + ")");
             if (DebugTap(pos, additive)) { }                       // debug click mode consumed it
             else if (_mode == PlayerMode.Invest) PlayerEvents.RaiseInvestAt(pos);
             else PlayerEvents.RaiseSelectAt(pos, additive);
@@ -959,6 +1042,7 @@ public partial class PlayerManager : TickBehaviour
 
     private void SwitchMode(PlayerMode mode)
     {
+        PlayerMode old = _mode;
         bool changed = mode != _mode;
         bool statReset = mode != PlayerMode.Invest && _hasInvestStat;
         if (mode == PlayerMode.Invest && changed) { _hasInvestStat = false; statReset = true; }   // wait for a number
@@ -967,7 +1051,11 @@ public partial class PlayerManager : TickBehaviour
         if (!changed && !statReset) return;
 
         _nextStatus = 0f;
-        if (changed) PlayerEvents.RaiseModeChanged(_mode);
+        if (changed)
+        {
+            if (DebugMode) DebugAct("MODE: " + old + " -> " + mode);
+            PlayerEvents.RaiseModeChanged(_mode);
+        }
         PlayerEvents.RaiseInvestStatChanged(_hasInvestStat, _investStat);
         if (changed)
             PlayerEvents.RaiseMessage(mode == PlayerMode.Invest ? "Invest mode: pick a stat (1-5)"
@@ -976,10 +1064,16 @@ public partial class PlayerManager : TickBehaviour
 
     private void HandleSelectInvestStat(StatType stat)
     {
-        if (_mode != PlayerMode.Invest) { _mode = PlayerMode.Invest; PlayerEvents.RaiseModeChanged(_mode); }
+        if (_mode != PlayerMode.Invest)
+        {
+            if (DebugMode) DebugAct("MODE: " + _mode + " -> Invest");
+            _mode = PlayerMode.Invest;
+            PlayerEvents.RaiseModeChanged(_mode);
+        }
         _investStat = stat;
         _hasInvestStat = true;
         _nextStatus = 0f;
+        if (DebugMode) DebugAct("INVEST: stat chosen = " + stat + " (click a province, A = all)");
         PlayerEvents.RaiseInvestStatChanged(true, stat);
         PlayerEvents.RaiseMessage("Invest: " + stat + "  (click a province, A = all)");
     }
@@ -990,16 +1084,30 @@ public partial class PlayerManager : TickBehaviour
 
     private void HandleInvestAt(Vector2 screen)
     {
-        if (!_hasInvestStat) { PlayerEvents.RaiseMessage("Choose a stat first (1-5)."); return; }
+        if (!_hasInvestStat)
+        {
+            if (DebugMode) DebugAct("INVEST: click refused, no stat chosen.");
+            PlayerEvents.RaiseMessage("Choose a stat first (1-5).");
+            return;
+        }
         Province p = ProvinceAt(screen);
-        if (p == null) return;
-        if (p.Owner != PlayerNation) { PlayerEvents.RaiseMessage("Not your province."); return; }
+        if (p == null) { if (DebugMode) DebugAct("INVEST: click on water / outside the map."); return; }
+        if (p.Owner != PlayerNation)
+        {
+            if (DebugMode) DebugAct("INVEST: " + p.Name + " is not yours (owner " + (p.Owner != null ? p.Owner.Name : "none") + ").");
+            PlayerEvents.RaiseMessage("Not your province.");
+            return;
+        }
         PlayerEvents.RaiseInvest(p, _investStat);
     }
 
     private void HandleInvest(Province p, StatType stat)
     {
+        double price = DebugMode && p != null && p.Owner != null ? World.GetIncreasePrice(p, stat) : 0.0;
         bool ok = TryInvest(p, stat, out string err);
+        if (DebugMode)
+            DebugAct("INVEST: " + stat + " in " + ProvinceName(p) + " -> " + (ok ? "QUEUED, price " + price.ToString("N1") : "REFUSED: " + err) +
+                     "  | treasury " + (PlayerNation != null ? PlayerNation.Treasury.ToString("N1") : "-"));
         PlayerEvents.RaiseInvestResult(p, stat, ok, err);
         if (!ok && err != null) PlayerEvents.RaiseMessage(err);
         _nextStatus = 0f;
@@ -1022,7 +1130,7 @@ public partial class PlayerManager : TickBehaviour
     private void HandleInvestAll(StatType stat)
     {
         Nation n = PlayerNation;
-        if (n == null || n.IsEmpty) return;
+        if (n == null || n.IsEmpty) { if (DebugMode) DebugAct("INVEST: invest-all refused, no player nation."); return; }
 
         double before = n.Treasury;
         int count = 0, attempts = 0;
@@ -1038,6 +1146,9 @@ public partial class PlayerManager : TickBehaviour
             if (okRound == 0) break;
         }
 
+        if (DebugMode)
+            DebugAct("INVEST: ALL " + stat + " -> " + count + " increases queued in " + attempts + " attempts, spent " +
+                     (before - n.Treasury).ToString("N1") + ", treasury " + n.Treasury.ToString("N1"));
         PlayerEvents.RaiseInvestAllResult(stat, count, before - n.Treasury);
         PlayerEvents.RaiseMessage(count > 0 ? stat + ": " + count + " increases queued" : "Nothing affordable.");
         _nextStatus = 0f;
@@ -1053,7 +1164,9 @@ public partial class PlayerManager : TickBehaviour
         if (r != null)
         {
             if (!additive) ClearSelectionSilently();
-            if (!_selected.Remove(r)) _selected.Add(r);               // additive click on a selected one removes it
+            bool removed = _selected.Remove(r);
+            if (!removed) _selected.Add(r);               // additive click on a selected one removes it
+            if (DebugMode) DebugAct("SELECT: regiment " + DbgReg(r) + (removed ? " deselected" : " selected") + ", total " + _selected.Count);
         }
         else
         {
@@ -1063,7 +1176,11 @@ public partial class PlayerManager : TickBehaviour
             {
                 SelectedProvince = p;
                 if (logSelection) LogProvince(p);
+                if (DebugMode)
+                    DebugAct("SELECT: province " + p.Name + " (#" + p.Id + ", owner " + (p.Owner != null ? p.Owner.Name : "none") + ", " +
+                             p.TileCount + " tiles, pop " + p.Population.ToString("N0") + ")");
             }
+            else if (DebugMode) DebugAct("SELECT: nothing under the pointer" + (additive ? "" : ", selection cleared."));
         }
         SelectionChanged();
     }
@@ -1082,6 +1199,7 @@ public partial class PlayerManager : TickBehaviour
                 if (sp.z >= 0f && rect.Contains(new Vector2(sp.x, sp.y))) _selected.Add(r);
             }
         }
+        if (DebugMode) DebugAct("SELECT: box selected " + _selected.Count + " regiments (" + DbgSelectedMen().ToString("N0") + " men)");
         SelectionChanged();
     }
 
@@ -1092,6 +1210,7 @@ public partial class PlayerManager : TickBehaviour
         if (m != null)
             for (int i = 0; i < m.Regiments.Count; i++)
                 if (m.Regiments[i].Military != null && !m.Regiments[i].IsColumn) _selected.Add(m.Regiments[i]);
+        if (DebugMode) DebugAct("SELECT: ALL regiments, " + _selected.Count + " (" + DbgSelectedMen().ToString("N0") + " men)");
         SelectionChanged();
         PlayerEvents.RaiseMessage(_selected.Count + " regiments selected");
     }
@@ -1099,6 +1218,7 @@ public partial class PlayerManager : TickBehaviour
     private void HandleClearSelection()
     {
         if (Selection == SelectionKind.None) return;
+        if (DebugMode) DebugAct("SELECT: cleared (" + _selected.Count + " regiments" + (SelectedProvince != null ? ", province " + SelectedProvince.Name : "") + ")");
         ClearSelectionSilently();
         SelectionChanged();
     }
@@ -1140,9 +1260,14 @@ public partial class PlayerManager : TickBehaviour
     private void HandleSecondaryAt(Vector2 screen)
     {
         if (DebugSecondary(screen)) return;
-        if (_mode != PlayerMode.Military || OwnSelectedCount() == 0) return;
+        if (_mode != PlayerMode.Military || OwnSelectedCount() == 0)
+        {
+            if (DebugMode) DebugAct("MOVE: right click ignored (needs Military mode and selected regiments; mode " + _mode + ", selected " + OwnSelectedCount() + ")");
+            return;
+        }
         Province p = ProvinceAt(screen);
         if (p != null) PlayerEvents.RaiseMoveSelected(p);
+        else if (DebugMode) DebugAct("MOVE: right click on water / outside the map.");
     }
 
     private void HandleMoveSelected(Province dest)
@@ -1159,7 +1284,7 @@ public partial class PlayerManager : TickBehaviour
             c += r.WorldPosition; cnt++;
             if (Army.MoveRegiment(r, dest)) { ok++; HoldForManual(r); } else fail++;     // BFS path is built automatically
         }
-        if (cnt == 0) return;
+        if (cnt == 0) { if (DebugMode) DebugAct("MOVE: no own regiments selected."); return; }
 
         if (ok > 0 && TacticVisuals.Enabled)
         {
@@ -1169,6 +1294,9 @@ public partial class PlayerManager : TickBehaviour
             if (dest.Owner != n) TacticVisuals.Announce(to, n.Name + ": Attack " + dest.Name, col, 4f);
             else TacticVisuals.Circle(to, Army.TileSize * 3f, col, 4f, true);
         }
+        if (DebugMode)
+            DebugAct("MOVE: " + cnt + " regiments -> " + dest.Name + " (owner " + (dest.Owner != null ? dest.Owner.Name : "none") + "): " +
+                     ok + " moving, " + fail + " no path" + (dest.Owner != n && dest.Owner != null ? "  [ATTACK]" : ""));
         PlayerEvents.RaiseCommandResult("Move to " + dest.Name, ok, fail);
         if (fail > 0 && ok == 0) PlayerEvents.RaiseMessage("No path to " + dest.Name);
         _nextStatus = 0f;
@@ -1188,7 +1316,7 @@ public partial class PlayerManager : TickBehaviour
             c += r.WorldPosition; cnt++;
             if (Army.MoveRegimentVia(r, waypoints)) { ok++; HoldForManual(r); } else fail++;
         }
-        if (cnt == 0) return;
+        if (cnt == 0) { if (DebugMode) DebugAct("PATH: no own regiments selected."); return; }
 
         if (ok > 0 && TacticVisuals.Enabled)
         {
@@ -1197,6 +1325,7 @@ public partial class PlayerManager : TickBehaviour
             for (int i = 0; i < waypoints.Count; i++) _lineBuf.Add(PosOf(waypoints[i]));
             TacticVisuals.Line(_lineBuf, n.Color, 8f, false, true);
         }
+        if (DebugMode) DebugAct("PATH: " + cnt + " regiments via " + DbgProvinces(waypoints) + ": " + ok + " moving, " + fail + " failed");
         PlayerEvents.RaiseCommandResult("Path (" + waypoints.Count + " waypoints)", ok, fail);
         _nextStatus = 0f;
     }
@@ -1205,6 +1334,7 @@ public partial class PlayerManager : TickBehaviour
     private void CommitPath()
     {
         BuildWaypoints(_pathPts, _wpBuf);
+        if (DebugMode) DebugAct("PATH: drawn line (" + _pathPts.Count + " samples) -> " + _wpBuf.Count + " waypoints");
         if (_wpBuf.Count == 0) { PlayerEvents.RaiseMessage("Path is not valid."); return; }
         if (_wpBuf.Count == 1) PlayerEvents.RaiseMoveSelected(_wpBuf[0]);
         else PlayerEvents.RaiseMoveSelectedVia(_wpBuf);
@@ -1242,16 +1372,21 @@ public partial class PlayerManager : TickBehaviour
     private void HandleRecall()
     {
         Nation n = PlayerNation;
-        if (n == null || n.Capital == null) return;
+        if (n == null || n.Capital == null) { if (DebugMode) DebugAct("RECALL: no capital to recall to."); return; }
+        if (DebugMode) DebugAct("RECALL: selected regiments go to the capital " + n.Capital.Name);
         HandleMoveSelected(n.Capital);
     }
 
     private void HandleSetPreparation(int level)
     {
         Military m = MilitaryOf();
-        if (m == null) return;
+        if (m == null) { if (DebugMode) DebugAct("PREPARATION: no military."); return; }
+        int old = m.PreparationLevel;
         m.SetPreparationLevel(Mathf.Clamp(level, 1, 10));
         _nextStatus = 0f;
+        if (DebugMode)
+            DebugAct("PREPARATION: level " + old + " -> " + m.PreparationLevel + " (target " + m.TargetPreparation.ToString("F0") + " %, now " +
+                     m.CurrentPreparation.ToString("F0") + " %, mobilized cap " + m.MobilizedCap.ToString("N0") + " men)");
         PlayerEvents.RaiseMessage("Preparation level " + m.PreparationLevel);
     }
 
@@ -1269,12 +1404,14 @@ public partial class PlayerManager : TickBehaviour
         Province cap = n != null ? n.Capital : null;
         if (cap == null || cap.Tiles == null || cap.Tiles.Length == 0 || map == null || cam == null)
         {
+            if (DebugMode) DebugAct("CAMERA: return to nation failed (no nation / capital).");
             PlayerEvents.RaiseMessage("No nation to return to.");
             return;
         }
         int t = cap.Tiles[0];
         Vector3 world = map.TileToWorldCenter(t % map.Width, t / map.Width);
         Vector3 sp = cam.WorldToScreenPoint(world);
+        if (DebugMode) DebugAct("CAMERA: return to " + n.Name + " (capital " + cap.Name + ")");
         EventBus.RaiseFocusCapital(new Vector2(sp.x, sp.y), true);
     }
 
