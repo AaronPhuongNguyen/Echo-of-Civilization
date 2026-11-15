@@ -283,8 +283,8 @@ MonoBehaviour:
     armyDestroyedPercent: 30
     allProvincesPercent: 50
     monthlyLeadPercent: 5
-    provinceScoreCost: 8
-    capitalScoreCost: 20
+    provinceScoreCost: 10
+    capitalScoreCost: 25
     occupiedCostFactor: 0.5
     spreadProvinces: 0
     truceDays: 360
@@ -1323,7 +1323,7 @@ MonoBehaviour:
       Total: 1
     diceRollDays: 4
     diceBuffDays: 3
-    pushStartShare: 0.4
+    pushStartShare: 0.5
     pushFullShare: 0.8
     pushSpeedFactor: 0.2
     winnersFollow: 1

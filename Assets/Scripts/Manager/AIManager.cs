@@ -315,10 +315,10 @@ public class AIManager : TickBehaviour
     public void RefreshNations() => RefreshMarks();
 
     private static readonly string[] TacticNames =
-    {
-        "", "Blitz", "Spearhead Breakthrough", "Pincer Movement", "Feint & Strike", "Encirclement",
-        "Reserve Surge", "Hold the Line", "Elastic Defence", "Counter-Punch", "Liberation Drive"
-    };
+{
+    "", "Blitz", "Spearhead Breakthrough", "Pincer Movement", "Feint & Strike", "Encirclement",
+    "Reserve Surge", "Hold the Line", "Elastic Defence", "Counter-Punch", "Liberation Drive", "Supply Cut"
+};
 
     private sealed class Op
     {
@@ -343,7 +343,7 @@ public class AIManager : TickBehaviour
         public bool SharesCustom, MergeQueued;
         public int InvestCursor, MergeGoal;
         public AITactic LastTactic;
-        public readonly float[] Ready = new float[11];
+        public readonly float[] Ready = new float[AISettings.TacticCount];
         public Op Op;
     }
 
@@ -383,7 +383,7 @@ public class AIManager : TickBehaviour
     private readonly List<int> _order = new List<int>();
     private readonly float[] _sw5 = new float[5];
     private readonly float[] _sb5 = new float[5];
-    private readonly float[] _tw = new float[11];
+    private readonly float[] _tw = new float[AISettings.TacticCount];
     private readonly List<Province> _cand = new List<Province>();
     private readonly List<int> _demand = new List<int>();
     private readonly List<Province> _mergeBuf = new List<Province>();
