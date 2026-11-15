@@ -402,9 +402,9 @@ public class ArmyManager : TickBehaviour
     [Header("Sea movement")]
     public bool allowSeaMovement = true;
     [Range(0.05f, 1f)] public float seaSpeedFactor = 0.5f;
-    [Min(1f)] public float seaRangeTiles = 60f;
-    [Min(100)] public int maxSeaNodes = 6000;
-    [Min(1)] public int seaHops = 8;   // how many connected sea regions one crossing may span
+    [Min(1f)] public float seaRangeTiles = 600f;
+    [Min(100)] public int maxSeaNodes = 12000;
+    [Min(1)] public int seaHops = 16;   // how many connected sea regions one crossing may span
 
     [Header("Visual")]
     [Tooltip("Visible map width (tiles) at which a card has scale 1. Zoom in = bigger cards, zoom out = smaller.")]

@@ -14,7 +14,7 @@ public class CombatSettings
 
     [Header("Damage")]
     [Tooltip("hp = ATK * Ratio / (DEF + Ratio) * damageScale * damageMultiplier * seconds.")]
-    [Min(0.00001f)] public float damageScale = 0.003f;
+    [Min(0.00001f)] public float damageScale = 0.03f;
     [Tooltip("Damage = ATK * Ratio / (DEF + Ratio). DEF equal to Ratio halves the damage.")]
     [Min(1f)] public float defenseRatio = 25000f;
 
