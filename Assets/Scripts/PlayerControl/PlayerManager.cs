@@ -420,6 +420,7 @@ public partial class PlayerManager : TickBehaviour
 
     public override void Tick(float dt)
     {
+        ReadTimeKeys();
         if (enableKeyboard) ReadKeyboard();
         ReadWheel();
         if (!ReadPinch()) ReadPointer(dt);
@@ -591,11 +592,15 @@ public partial class PlayerManager : TickBehaviour
 
     private static bool ShiftKey() => Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
 
-    private void ReadKeyboard()
+    /// <summary>Pause / speed work in EVERY mode (Normal, Invest, Military, debug click modes), even with enableKeyboard off.</summary>
+    private void ReadTimeKeys()
     {
         if (Input.GetKeyDown(pauseKey)) EventBus.RaiseTogglePause();
         if (Input.GetKeyDown(speedUpKey)) EventBus.RaiseSpeedUp();
         if (Input.GetKeyDown(speedDownKey)) EventBus.RaiseSpeedDown();
+    }
+    private void ReadKeyboard()
+    {
         if (Input.GetKeyDown(focusCapitalKey) && !(DebugMode && CtrlKey()))
         {
             bool hasMouse = Input.mousePresent && !Application.isMobilePlatform;
