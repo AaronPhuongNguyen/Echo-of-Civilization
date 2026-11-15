@@ -747,6 +747,33 @@ public class ArmyManager : TickBehaviour
         return true;
     }
 
+    /// <summary>Moves a regiment through several waypoints in order (each leg is a normal BFS path).</summary>
+    public bool MoveRegimentVia(Regiment r, IList<Province> waypoints)
+    {
+        if (r == null || r.Military == null || waypoints == null || waypoints.Count == 0) return false;
+        if (r.State == RegimentState.Retreating) return false;
+
+        Nation mover = r.Military.Nation;
+        Province cur = r.CurrentProvince ?? r.Province;
+        var full = new List<Province>();
+        var seg = new List<Province>();
+        for (int i = 0; i < waypoints.Count; i++)
+        {
+            Province to = waypoints[i];
+            if (to == null || to == cur) continue;
+            Nation restrictTo = CanEnter(mover, cur) ? mover : null;
+            if (!FindPath(cur, to, seg, restrictTo, null)) break;      // keep what we have so far
+            full.AddRange(seg);
+            cur = to;
+        }
+        if (full.Count == 0) return false;
+
+        r.BeginMove(full, ProvinceWorldPos(full[0]));
+        TrackMoving(r);
+        if (!r.IsColumn) RefreshStacks(r.Military);
+        return true;
+    }
+
     internal bool CanEnter(Nation mover, Province p)
     {
         if (mover == null || p == null) return true;

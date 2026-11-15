@@ -355,6 +355,7 @@ public class AIManager : TickBehaviour
         public Nation ThreatFrom, WarTarget;
         public Province Staging;
         public bool SharesCustom, MergeQueued;
+        public bool AutoOnly;
         public int InvestCursor, MergeGoal;
         public float MergeScale;
         public AITactic LastTactic;
@@ -380,6 +381,10 @@ public class AIManager : TickBehaviour
     private List<Regiment>[] _regsAt;
     private readonly List<int> _touched = new List<int>();
     private readonly HashSet<int> _hot = new HashSet<int>();      // provinces the AI is fighting for (reinforce priority)
+    private readonly HashSet<int> _autoIds = new HashSet<int>();          // player nations under Auto Battle
+    private readonly HashSet<Regiment> _manual = new HashSet<Regiment>(); // regiments the player is commanding right now
+    private static readonly Predicate<Regiment> ManualDone =
+        r => r.Military == null || (r.State != RegimentState.Moving && !r.HasPath);
 
     private readonly List<Regiment> _free = new List<Regiment>();
     private readonly List<Regiment> _atk = new List<Regiment>();
@@ -487,7 +492,7 @@ public class AIManager : TickBehaviour
     {
         _states.Clear(); _list.Clear(); _mergeQ.Clear(); _cursor = 0;
         _regsAt = null; _touched.Clear(); _hot.Clear(); _touch = null; _isCand = null; _inMine = null; _costArr = null;
-        _beautyQ.Clear(); _beautySet.Clear();
+        _beautyQ.Clear(); _beautySet.Clear(); _autoIds.Clear(); _manual.Clear();
     }
 
     private void HandleRemoved(Nation n)
@@ -497,7 +502,7 @@ public class AIManager : TickBehaviour
         _list.Remove(s);
     }
 
-    private void HandlePlayerChanged(Nation o, Nation n) => RefreshMarks();
+    private void HandlePlayerChanged(Nation o, Nation n) { _autoIds.Clear(); _manual.Clear(); RefreshMarks(); }
     private void Rebuild() { ClearAll(); RefreshMarks(); }
 
     /// <summary>A merged province may be a staging / strike target of an operation: those operations are cancelled.</summary>
@@ -525,9 +530,21 @@ public class AIManager : TickBehaviour
             if (player)
             {
                 n.IsAI = false;
-                if (_states.TryGetValue(n.Id, out AIState old)) { _states.Remove(n.Id); _list.Remove(old); }
+                bool auto = _autoIds.Contains(n.Id) && !n.IsEmpty;
+                if (_states.TryGetValue(n.Id, out AIState old))
+                {
+                    if (auto && old.AutoOnly) continue;
+                    _states.Remove(n.Id); _list.Remove(old);
+                }
+                if (auto)
+                {
+                    var a = new AIState { Nation = n, AutoOnly = true, Aggression = 0.5f, Friendliness = 0.5f, NextThink = _clock };
+                    _states.Add(n.Id, a); _list.Add(a);
+                }
                 continue;
             }
+            n.IsAI = true;
+            if (_states.TryGetValue(n.Id, out AIState ex) && ex.AutoOnly) { _states.Remove(n.Id); _list.Remove(ex); }   // old player nation
             n.IsAI = true;
             if (n.IsEmpty || _states.ContainsKey(n.Id)) continue;
 
@@ -561,8 +578,9 @@ public class AIManager : TickBehaviour
         {
             AIState st = _list[i];
             if (st.Nation.IsEmpty) continue;
+            if (st.AutoOnly) continue;
 
-            CheckWarEnd(st);
+                CheckWarEnd(st);
             if (today >= st.NextEconomy)
             {
                 st.NextEconomy = today + settings.economyIntervalDays + RNG.GetInt(0, 3);
@@ -589,6 +607,26 @@ public class AIManager : TickBehaviour
                 }
             }
         }
+    }
+
+    public bool IsAutoBattle(Nation n) => n != null && _autoIds.Contains(n.Id);
+
+    public void SetAutoBattle(Nation n, bool on)
+    {
+        if (n == null || n.IsEmpty) return;
+        if (on)
+        {
+            if (!PlayerManager.HasInstance || PlayerManager.Instance.PlayerNation != n) return;
+            _autoIds.Add(n.Id);
+        }
+        else { _autoIds.Remove(n.Id); _manual.Clear(); }
+        RefreshMarks();
+    }
+
+    /// <summary>The player gave an order: the AI leaves this regiment alone until its path is finished.</summary>
+    public void HoldManual(Regiment r)
+    {
+        if (r != null && r.Military != null && _autoIds.Contains(r.Military.Nation.Id)) _manual.Add(r);
     }
 
     #endregion
@@ -786,6 +824,8 @@ public class AIManager : TickBehaviour
         if (_list.Count == 0 || map == null || !map.IsReady || !ArmyManager.HasInstance || !WarManager.HasInstance
             || !RelationshipManager.HasInstance || !CombatManager.HasInstance) return;
 
+        if (_manual.Count > 0) _manual.RemoveWhere(ManualDone);
+
         _clock += deltaTime;
         _visTokens = Mathf.Min(4f, _visTokens + Time.unscaledDeltaTime * settings.visualsPerSecond);
         if (Time.unscaledTime >= _nextHotClear) { _hot.Clear(); _nextHotClear = Time.unscaledTime + settings.militaryInterval * 2f; }
@@ -915,8 +955,15 @@ public class AIManager : TickBehaviour
         if (m == null || m.Regiments.Count == 0) return;
 
         bool war = WM.IsAtWar(n);
+        if (st.AutoOnly && !war)                       // Auto Battle only acts during a war
+        {
+            st.Op = null;
+            if (st.SharesCustom) { m.ResetShares(); st.SharesCustom = false; }
+            return;
+        }
         UpdateThreat(st, m, war);
-        m.SetPreparationLevel(war ? 10 : Mathf.RoundToInt(Mathf.Lerp(settings.peacePrepLevel, settings.alertMaxPrepLevel, st.Threat)));
+        if (!st.AutoOnly)                               // the player keeps control of the preparation level
+            m.SetPreparationLevel(war ? 10 : Mathf.RoundToInt(Mathf.Lerp(settings.peacePrepLevel, settings.alertMaxPrepLevel, st.Threat)));
 
         if (war) CommandWar(st, m);
         else
@@ -925,13 +972,13 @@ public class AIManager : TickBehaviour
             if (st.SharesCustom) { m.ResetShares(); st.SharesCustom = false; }
             CommandPeace(st, m);
         }
-        if (settings.manageShares && (war || st.Threat > 0.4f)) ManageShares(st, m, war);
+        if (settings.manageShares && !st.AutoOnly && (war || st.Threat > 0.4f)) ManageShares(st, m, war);
     }
 
     private bool Hostile(Nation a, Nation b) => WM.IsAtWar(a, b);
-
-    private static bool Movable(Regiment r) =>
-        !r.IsColumn && r.Military != null && (r.State == RegimentState.Idle || r.State == RegimentState.Reinforcing);
+    private bool Movable(Regiment r) =>
+    !r.IsColumn && r.Military != null && !_manual.Contains(r) &&
+    (r.State == RegimentState.Idle || r.State == RegimentState.Reinforcing);
 
     private static bool InOrHeading(Regiment r, Province p) =>
         (r.State != RegimentState.Moving && r.CurrentProvince == p) || (r.HasPath && r.Destination == p);
@@ -1214,7 +1261,7 @@ public class AIManager : TickBehaviour
         }
         LiberationColumns(st, m);
         WarReinforce(st, m);
-        SurrenderCheck(st);
+        if (!st.AutoOnly) SurrenderCheck(st);
     }
 
     private bool Committed(Regiment r, CombatManager cm)
@@ -1973,7 +2020,7 @@ public class AIManager : TickBehaviour
         for (int i = op.Units.Count - 1; i >= 0; i--)
         {
             Regiment r = op.Units[i];
-            if (r.Military == null || r.State == RegimentState.Retreating || r.Manpower <= 0.5)
+            if (r.Military == null || r.State == RegimentState.Retreating || r.Manpower <= 0.5 || _manual.Contains(r))
             { op.Units.RemoveAt(i); op.Grp.RemoveAt(i); op.Stage.RemoveAt(i); }
         }
         bool counterOk = op.Kind == AITactic.CounterPunch ? EnemyMen(n, op.Strike) > 0.0 : (op.Strike.Owner != null && Hostile(n, op.Strike.Owner));
